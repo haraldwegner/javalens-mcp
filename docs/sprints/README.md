@@ -32,10 +32,21 @@ Until proper sprint docs are written, the fork's forward plan is split across:
     surface.
 - [`../release-notes/`](../release-notes/) — per-release "what shipped" detail.
 
+## Numbering note
+
+This fork has **no independent sprint numbering**. "Sprint N" is a
+cross-repo unit owned by the `javalens-manager` side — historically a
+sprint pairs a manager `v0.x` release with a fork `v1.y` release
+(e.g. Sprint 12 = manager v0.12.0 + fork v1.6.0; Sprint 14 = fork
+v1.7.1, manager packaging-only). Fork-only work is tracked by **fork
+release version** (`v1.7.2`, `v1.8.0`, …), not a fork sprint number.
+
 ## Convention going forward
 
-When the next fork sprint is planned, write `docs/sprints/sprint-15-backlog.md`
-(requirements + design + architecture) here, and keep the executable
-step-by-step plan outside the repo. Migrate the relevant
-`upgrade-checklist.md` backlog prose into that sprint doc so the checklist
-goes back to being purely a target-platform-bump checklist.
+When a cross-repo sprint is planned, the manager side owns the sprint
+number; the fork's slice of that sprint gets a doc here named for the
+sprint (`sprint-N-backlog.md`) or, for fork-only arcs, for the fork
+release (`v1.8.0-backlog.md`). Requirements + design + architecture go
+in that doc; the executable step-by-step plan is kept outside the repo.
+Migrate the relevant `upgrade-checklist.md` backlog prose into it so the
+checklist returns to being purely a target-platform-bump checklist.
