@@ -7,6 +7,168 @@ For each entry include: ID, date observed, severity, reproducer, expected vs act
 
 ---
 
+## #12 — `find_implementations` / `find_field_writes` require exact `(filePath,line,column)`; no FQN/type-scoped path, and the constraint is undocumented
+
+- **Status:** OPEN
+- **Date observed:** 2026-05-15 / 2026-05-13 (EXECSIM-Java sessions)
+- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`, recorded in `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`
+- **Server version:** 1.7.x (2.0.0-SNAPSHOT health string)
+- **Severity:** MEDIUM — forces a `Bash grep` fallback for the single most common navigation question ("who implements / writes X?"); the misleading error reads like a caller mistake.
+
+### Reproducer
+
+```
+find_implementations(typeName="com.execsim.execution.ExecutionContext")
+→ INVALID_PARAMETER: Required parameter missing: filePath
+
+find_field_writes  targeted at OrbExecutionStrategy$Slot.pendingEntry by (line,col)
+→ "Symbol at position is not a field (found: Method)"  (coords off by a few lines; refuses instead of offering near candidates)
+```
+
+### Expected
+
+Either an FQN/type-scoped lookup (`find_implementations(typeName=…)` searches the whole workspace) OR a schema description that states the `(filePath,line,column)` requirement up-front so the caller doesn't infer a type-scoped API that doesn't exist.
+
+### Actual
+
+Whole `find_*` family is position-only. `find_implementations`'s schema says "Find implementations" with no mention that the lookup is file-scoped. `find_field_writes` refuses on minor coordinate misalignment rather than returning candidates near the position.
+
+### Suggested fix
+
+Bug-side: disclose the `filePath`/coords requirement in each `find_*` tool's schema description (same fix-class as v1.7.1 #3). `find_field_writes`: when the position resolves to a non-field, return nearby field candidates instead of a hard refusal. The deeper FQN-entry-point ask is a **feature** tracked in `upgrade-checklist.md` (v1.8.x backlog) — this entry is only the schema-honesty + graceful-degradation defect.
+
+### Cross-reference
+
+- Feature counterpart (FQN `find_*` overload) — `upgrade-checklist.md` Sprint 14 (v1.8.x) backlog. Most-repeated ask across every EXECSIM session.
+
+---
+
+## #11 — Acquired `projectKey` silently invalidated by workspace-state mutation; fails with misleading `INVALID_PARAMETER`
+
+- **Status:** OPEN
+- **Date observed:** 2026-05-15 / 2026-05-16 (EXECSIM-Java Sprint 3 / 3.1)
+- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
+- **Server version:** 1.7.x
+- **Severity:** MEDIUM — a long-lived caller's `projectKey` goes stale mid-session with an error that reads like a caller bug, not a state change.
+
+### Reproducer
+
+1. `list_projects` → acquire `projectKey="execsim-java"`.
+2. (Between turns, another managed client / manager re-balances the workspace; `execsim-java` is dropped, only `orb` remains, sourceFileCount 0.)
+3. `compile_workspace(projectKey="execsim-java")` → `INVALID_PARAMETER: Unknown projectKey`.
+
+### Expected
+
+A structured, self-describing error: `PROJECT_KEY_DROPPED: project 'execsim-java' was unloaded (by client/manager) at <ts>; re-acquire via list_projects` — OR transparently succeed against the currently-loaded equivalent.
+
+### Actual
+
+`INVALID_PARAMETER: Unknown projectKey` — indistinguishable from the caller passing a typo'd key.
+
+### Suspected root cause
+
+Multi-tenant JVM model (cf. v1.7.1 #5): each MCP client spawns its own JVM; the manager mutates loaded-project sets independently. No epoch/version on `projectKey`, no "this key was valid but is now retired" distinction.
+
+### Suggested fix
+
+Distinct error code `PROJECT_KEY_DROPPED` with the unload reason + timestamp; keep `INVALID_PARAMETER` strictly for never-valid keys. Optionally an epoch token in `list_projects` output so callers can detect a state shift before a keyed call fails.
+
+---
+
+## #10 — `move_class` cross-project deficiencies (no physical relocation, empty `modifiedFiles`, test-source consumers missed, no back-edge warning)
+
+- **Status:** OPEN
+- **Date observed:** 2026-05-11 (EXECSIM-Java Sprint 1 Phase 1)
+- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
+- **Server version:** 1.7.x
+- **Severity:** MEDIUM-HIGH — silently produces broken cross-project state; the `~30 class` migration it was meant to automate falls back to manual `mv`/`rmdir`/`grep` per class.
+
+### Reproducer
+
+`move_class(filePath="ORB-Java/.../indicators/TechnicalIndicators.java", targetPackage="com.execsim.training.core.features.indicators")`
+
+### Actual (four distinct defects)
+
+1. **No physical relocation across projects.** File's `package` decl is rewritten but the file stays in the originating project's source tree (`ORB-Java/src/.../com/execsim/...`), an alien `com.execsim.*` dir inside ORB-Java. Manual `mv` + `rmdir` required.
+2. **`modifiedFiles: []` always empty** despite the package decl + multiple consumer imports being rewritten. No way for the caller to verify the change set.
+3. **Cross-project consumer updates skip test sources.** `EXECSIM-Java` test `OrbModelRankingParityIT.java` kept the old import; 5/6 consumers updated, the test straggler not.
+4. **No back-edge pre-flight.** When the origin project still references the moved class, the move silently yields broken-standalone-compile or a circular Maven dep. No warning, no opt-in flag.
+
+### Suggested fix
+
+- `targetProjectKey` param (or auto-detect from `targetPackage` matching another project's source root) → physically move the file.
+- Populate `modifiedFiles` with the real change set.
+- Include test sources in the consumer-update scan; document the scope.
+- Pre-flight `find_references` on the source FQN scoped to the origin project; if internal back-edges exist, warn (or refuse without `--allow-back-edges`) and point at strangler-fig / branch-by-abstraction options.
+
+### Cross-reference
+
+- Related feature asks (`copy_class`, `wrap_class`) — `upgrade-checklist.md` v1.8.x backlog. Together they form the strangler-fig cross-project-migration toolset.
+
+---
+
+## #9 — `compile_workspace` never compiles test sources — reports `errorCount:0` while `mvn test-compile` fails
+
+- **Status:** OPEN
+- **Date observed:** 2026-05-17 (EXECSIM-Java Sprint 4 Stage 8.4)
+- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
+- **Server version:** 1.7.x
+- **Severity:** HIGH — `compile_workspace` is the documented fast-feedback "is it green?" tool; a signature change that breaks N test files reports clean, so a caller advances on a broken tree.
+
+### Reproducer
+
+1. Add a parameter to `CandidateLabelMachine` constructor (main-source edit).
+2. `compile_workspace(projectKey="execsim-java")` → `{errorCount: 0}`.
+3. `mvn test-compile` → 8 errors across 7 test files (old arity at call sites).
+
+### Expected
+
+`compile_workspace` either compiles test sources by default, or exposes `scope: "main"|"test"|"both"` and documents that the default excludes tests.
+
+### Actual
+
+Silently main-source-only. The "0 errors" is misleading for any signature change that affects test callers — the exact opposite of what "compile workspace" implies.
+
+### Suggested fix
+
+Add `scope: "main"|"test"|"both"` (default `"both"`, or at minimum document `"main"`-only and make `"both"` a one-liner). Compile test source roots via the same `IJavaProject.build` path already used for main.
+
+### Cross-reference
+
+- Sibling of #8 (both make `compile_workspace`'s green untrustworthy; different root cause — #8 is stale incremental cache, #9 is scope-never-included).
+
+---
+
+## #8 — `compile_workspace` false-pass on record / signature shape changes (JDT stale incremental cache)
+
+- **Status:** OPEN
+- **Date observed:** 2026-05-16 (EXECSIM-Java Sprint 3.1 Stage 2)
+- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
+- **Server version:** 1.7.x
+- **Severity:** HIGH — the build-status signal itself is wrong (worse than a stale *navigation* index); a caller treating `errorCount:0` as a green light advances with code that does not compile.
+
+### Reproducer
+
+1. Extend `LabelCacheKey` from a 5-field record to a 7-field record (canonical constructor arity changes; 3 call sites now wrong).
+2. `compile_workspace(projectKey="execsim-java")` → `{errorCount: 0, diagnostics: []}` ✗ false pass.
+3. `mvn compile` (non-clean) → also false pass (Maven reuses cached class files).
+4. `mvn clean compile test-compile` → 3 real compile failures ✓.
+
+### Suspected root cause
+
+JDT's incremental compiler reuses class files compiled against the OLD record/constructor signature; it doesn't invalidate downstream consumers' bytecode when the record's canonical constructor shape changes. No JDT equivalent of Eclipse IDE's `Project → Clean → Build All` is exposed.
+
+### Suggested fix
+
+`clean_compile_workspace` tool, OR `clean: true` on `compile_workspace`, that drops JDT incremental state and full-recompiles. Ideally fold into the `refresh_workspace`/`reindex` tool (see `upgrade-checklist.md` v1.8.x backlog) so one tool covers: refresh-from-disk + incremental-cache invalidation + full recompile. Narrower auto-fix: invalidate the cache when a record's canonical constructor (or an interface/public-method signature) changes.
+
+### Cross-reference
+
+- Sibling of #9. Both feed the "`compile_workspace` is advisory, not authoritative during signature changes" conclusion in `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`.
+- The `reindex`/`refresh_workspace` feature must invalidate the *incremental compile* cache, not just the symbol index, to close this — recorded in the v1.8.x backlog.
+
+---
+
 ## #7 — `add_project` on the fork's own multi-module repo fails with "Build path contains duplicate entry: gradle-tooling-api-8.10.jar"
 
 - **Status:** OPEN

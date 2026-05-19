@@ -97,6 +97,25 @@ Start with the method-granularity tool; promote to token-stream if agent demand 
 
 **Process-death → `Failed` phase.** Manager-side: today's polling flips a dead workspace to `Stopped`, not `Failed`. The Sprint 12 plan promised the tray icon flips to 🔴 within ~5s of external kill — that path needs the polling to recognise unexpected exits (non-zero exit code, no graceful-shutdown signal seen) and set `Failed` instead. Tracked here because the fork's tray menu shows the result of that aggregation.
 
+**FQN entry point for the whole `find_*` family.** *The single most-repeated ask across every EXECSIM-Java session* (Sprint 1, 6b, 3, 4 — see `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`). `find_references` / `find_implementations` / `find_field_writes` all require a `(filePath, line, column)` triple that must resolve *in the project being searched* — so cross-project consumer mapping ("who in strategies-orb uses `com.orb.strategy.inference.OrbInference`?") is impossible without a `Bash grep` fallback, which becomes the fast path. Add an FQN/symbol overload: `find_references(symbol="com.orb.strategy.X", scope="workspace")` etc., no position needed. The workspace already has every project's index loaded — this is O(n) over symbols, not a re-parse. Closes the coordinate-bisection cost for interactive refactors. The schema-honesty + graceful-degradation half of this is filed as bug #12; this is the capability half.
+
+**`refresh_workspace` / `reindex` — consolidated spec.** Repeatedly asked (Sprint 3, 3.1, 4) and proposed independently for v1.7.2. The EXECSIM feedback sharpens the requirements — it must do *all three*, not just symbol-index refresh:
+1. **Refresh from disk** — pick up files created/edited via `Write`/`Edit` (the recurring "index-stale-after-Write": new package's classes invisible to `search_symbols`/`analyze_type` until reload). Sidesteps bug #6's broken watcher.
+2. **Invalidate JDT's incremental compile cache** — not just the symbol index. Without this, bug #8 (`compile_workspace` false-pass on record/signature shape change) stays open: JDT reuses class files compiled against the old signature.
+3. **Preserve workspace/`projectKey` state** — must NOT drop projects or rotate keys (today `remove_project`+`add_project` is the only knob and it resets everything, invalidating the caller's `projectKey` → bug #11). Per-project scope: `refresh_workspace(projectKey?)`.
+Effectively this one tool also closes bug #8 and is the manual override for bug #6. Returns post-rebuild diagnostics, `compile_workspace` shape.
+
+**`copy_class` + `wrap_class` — strangler-fig cross-project migration toolset.** From EXECSIM Sprint 1 (30+ class cross-project migration). `move_class` is destructive and within-project (bug #10); real migrations need the duplicate-wrap-redirect-cap protocol:
+- `copy_class(from=FQN, to=FQN)` — duplicate into the target package with the normal package-decl rewrite on the *copy*, original untouched and still referenced. Removes the `cp + sed -i package` bash step from every atomic-protocol iteration (~30 round-trips saved in one migration).
+- `wrap_class(wrapperFqn, targetFqn, deprecate=true)` — rewrite the original into a thin delegate (every public method → `return target.method(args)`, copy constructor signatures, add `@Deprecated`). Nice-to-have; wrapper bodies are simple enough that a script handles them, so lower priority than `copy_class`.
+These plus the bug #10 `move_class` fixes form a coherent "Fowler StranglerFig / Branch-by-Abstraction support" arc.
+
+**`pre_edit_impact(filePath, line, col)` — proactive impact summary.** Asked Sprint 6b and Sprint 4 (the `change_method_signature`/`analyze_change_impact` skips that cost a parity-run iteration each). A cheap 5-line summary returned *before* an edit — "N callers in M files, K of them test files, complexity X, recently-changed by Y" — pushes impact-awareness into the default workflow without the caller remembering to invoke `analyze_change_impact` separately. Friction-reduction, not new capability; the analysis already exists, this is a packaged entry point.
+
+**Raise `find_references` truncation cap.** Currently hard-capped at 100; a 100-reference class returns exactly 100 with no signal there are more. Make it a parameter (default 100, caller can raise) or return a `truncated: true, total: N` field.
+
+**HTTP/SSE transport (strengthens v1.7.1 #5 Option B).** EXECSIM Session 2 documented that `stdio` MCP spawning is *completely broken* inside sandboxed agents (Antigravity `nsjail` on Ubuntu 24.04 / aarch64 GB10) AND that a containerized agent targeting the same `-data` dir as a running Claude hangs forever on the Eclipse JDT workspace lock. HTTP/SSE on the host (manager runs one JVM per workspace, clients connect by URL) bypasses both the broken local-spawn and the lock contention. This was the deferred Option B for the multi-tenant problem; the sandbox evidence makes it the durable fix, not just an optimisation.
+
 ### Known limitation — `EncapsulateField` happy-path (JDT 2024-09 bug)
 
 `SelfEncapsulateFieldRefactoring.createSetterMethod` has a bug in its fallback path: when `CodeGeneration.getSetterMethodBodyContent()` returns null (because no `org.eclipse.jdt.ui.text.codetemplates.setterbody` template is registered), it creates a bare `Assignment` AST node and calls `block.statements().add(ass)`. `Block.statements()` expects `Statement` instances, so this fails with `class Assignment is not an instance of class Statement`.
@@ -143,6 +162,18 @@ Refactor across one bundle, ~50 call sites, ~30 new tests, three small architect
 - More tools. The catalogue is already long.
 - Tighter integration with niche IDE features. Agents don't use them.
 - Anything that requires a multi-step setup before the first call.
+
+### 2026-05-11 → 05-17 — EXECSIM-Java Sprints 1–4 + 6b (6 sessions, full log in that repo)
+
+Full feedback: [`~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`](file:///home/harald/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md). Workspace: `execsim-java` + `strategies-orb` + `orb-java` (3 Maven, JDK 21, aarch64). Cumulative pattern across 6 sessions:
+
+**Earned its keep, every session:** `compile_workspace` as the post-edit inner loop (≈1 s vs ~30 s `mvn compile`) — the single highest-value capability. `analyze_type` / `get_type_members` / `search_symbols` for the first 10–20 min of any unfamiliar-area refactor (one `analyze_type` ≈ 5 `Read`s). `find_references` for signature-change impact sizing (36 refs in one call vs 4–5 greps). `change_method_signature` when the caller remembers it exists (one call vs 9 chained Edits — Harald caught the miss once).
+
+**Cumulative friction (now filed):** the build-status signal is wrong for shape changes (bug #8 stale incremental cache, #9 no test-source compile) — "this is more serious than the navigation-index gap; the caller advances on a broken tree". `move_class` cross-project deficiencies (#10). `projectKey` silently dropped by state mutation (#11). `find_*` family position-only, no FQN (#12 + the v1.8.x feature). Index-stale-after-`Write` → fallback to `Read`+`grep` for net-new packages.
+
+**The recurring meta-conclusion** (verbatim, Session 3): *"The capability surface covers the actual use cases — what's missing is operational hygiene (reindex, key stability, error messages) rather than new tools. Don't add features; fix the lifecycle."* Session 4 restated: *"Capability surface is right; lifecycle is where the friction lives."* This reprioritises the v1.8.x backlog: **the `refresh_workspace`/`reindex` consolidation + the `compile_workspace` correctness fixes (#8/#9) outrank the new-tool items (`find_duplicate_code`, modernisation arc) for agent-trust impact.** The catalogue is not the bottleneck; the index/build-cache lifecycle is.
+
+**Sandbox finding (Session 2):** `stdio` spawning is fatally broken inside Antigravity's `nsjail` on the GB10; lock contention with a running Claude is unavoidable. HTTP/SSE on the host is the only reliable path for containerized agents — promotes v1.7.1 #5 Option B from "optimisation" to "durable fix".
 
 ### Template for future sessions
 
