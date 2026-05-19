@@ -274,7 +274,7 @@ Gradle support is **explicitly deferred to v1.8.x**.
 
 Models often default to native tools (`grep`, `Read`, generic LSP) over MCP tools, even when semantic analysis gives much better results. Training data is dominated by text-search patterns and the model may not recognise when JDT-driven analysis is correct where text search is wrong.
 
-**Counter the bias** by adding guidance to your project instructions or system prompt (e.g. `CLAUDE.md` for Claude Code):
+**Counter the bias** by adding guidance to your agent's project instructions or system prompt:
 
 ```markdown
 ## Code analysis preferences

@@ -1,10 +1,10 @@
 # Sprint docs
 
-Per the `~/CLAUDE.md` collaboration spec:
+Team collaboration convention:
 
 > We work agile in sprints. **Sprint docs** (in each repo under `docs/sprints/...`)
 > are requirements + design + architecture. **Actionable plans** are sprint-doc
-> derivatives that an agent can execute. They live under `~/.claude/plans/`.
+> derivatives that an agent can execute; they're kept outside the repo.
 > Do NOT conflate the two.
 
 This directory is the home for `javalens-mcp` sprint docs (`sprint-N-backlog.md`,
@@ -35,7 +35,7 @@ Until proper sprint docs are written, the fork's forward plan is split across:
 ## Convention going forward
 
 When the next fork sprint is planned, write `docs/sprints/sprint-15-backlog.md`
-(requirements + design + architecture) here, and put the executable plan under
-`~/.claude/plans/`. Migrate the relevant `upgrade-checklist.md` backlog prose
-into that sprint doc so the checklist goes back to being purely a
-target-platform-bump checklist.
+(requirements + design + architecture) here, and keep the executable
+step-by-step plan outside the repo. Migrate the relevant
+`upgrade-checklist.md` backlog prose into that sprint doc so the checklist
+goes back to being purely a target-platform-bump checklist.
