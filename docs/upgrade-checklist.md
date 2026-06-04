@@ -74,37 +74,13 @@ Production usage works (manager → real workspace → real test classpath). Val
 
 **Subtle correctness bug — `optimize_imports_workspace` AST visit scope.** The naive implementation (visit the entire `CompilationUnit`) treats the import declaration's own qualified name as a use of the imported type, marking every import as "used" and removing nothing. Fix: visit only the type declarations + package declaration, never the import statements themselves. See [`OptimizeImportsWorkspaceTool.collectReferencedTypes`](../org.javalens.mcp/src/org/javalens/mcp/tools/workflow/OptimizeImportsWorkspaceTool.java).
 
-### Sprint 14 (v1.8.x) follow-up backlog
+### Sprint 14 (v1.8.0) — shipped + Sprint 15+ backlog
 
-Items deferred from Sprint 13 plus IntelliJ-parity tools the agent is missing. Surfaced here so the next sprint's plan starts from a real list.
+**Shipped in v1.8.0:** Gradle path for the Ring 3 dep tools (text-level Groovy DSL + Kotlin DSL; Buildship target-platform integration deferred to v1.8.x.x — caller runs `refresh_workspace` for classpath sync); `find_duplicate_code` clone detector (regex tokenizer over normalized AST method-body sequences — JDT's `IScanner` is unreachable in Tycho's headless test runtime); FQN overload for the whole `find_*` family via the shared `FqnResolver`, 4 schemas extended; `refresh_workspace` consolidated lifecycle tool (resource refresh + `CLEAN_BUILD`+`FULL_BUILD` + `projectKey` preservation, also the manual override for the `WorkspaceFileWatcher` belt-and-braces fix); process-death → `Failed` phase landed in manager v0.14.0. See [`docs/release-notes/v1.8.0.md`](release-notes/v1.8.0.md).
 
-**Gradle path for the Ring 3 dep tools.** Sprint 13 ships `add_dependency` / `update_dependency` / `find_unused_dependencies` Maven-only — they detect non-Maven projects and return `INVALID_PARAMETER`. Adding Gradle:
-
-- Target platform: `org.eclipse.buildship.core` is **not** on our target today; add it via the existing Eclipse update site (Buildship ships from the same `download.eclipse.org` updates path as JDT). Bump `sequenceNumber` in [`org.javalens.target/org.javalens.target.target`](../org.javalens.target/org.javalens.target.target).
-- `add_dependency`: append a line to the `dependencies { ... }` block in `build.gradle` / `build.gradle.kts`. Buildship's project model is read-only; mutate the file textually (preserve user formatting, same approach as the Maven path) and trigger a Gradle refresh via `org.eclipse.buildship.core.workspace.GradleBuild.synchronize`.
-- `update_dependency`: regex-replace the version in the matched dep line. Single-quoted, double-quoted, and Kotlin-DSL forms all need handling.
-- `find_unused_dependencies`: parse declared deps from `build.gradle` (regex over `(implementation|api|compileOnly|...)\s+['"]g:a:v['"]`); rest of the heuristic is identical to the Maven path. Optional richer mode: use Buildship's resolved-classpath model.
-- Detection precedence in all three tools: `pom.xml` first (Maven wins on hybrid projects), `build.gradle*` second.
+**Still open (Sprint 15+ backlog):** items below were deferred — IntelliJ-parity tools the agent is missing, or v1.8.x follow-ups that fell outside Sprint 14's bug-batch budget.
 
 **Richer `find_unused_dependencies` via M2E classpath inspection.** The v1.7.0 heuristic (`groupId` prefix match + `artifactId`-as-dotted-suffix) has known false positives for deps whose package names don't follow the coordinate convention (e.g. some Spring-related artifacts). For a precise read, walk the M2E-resolved classpath: each declared dep has a resolved JAR; index its actual provided packages via `JarFile`/`ZipFile` walk and `package-info.class` / class-prefix extraction; cross-reference against import statements collected from the source tree. Yields zero false positives at the cost of M2E being active in the runtime — defer the check to projects with M2E auto-import on.
-
-**Duplicate code detection (`find_duplicate_code`).** IntelliJ surfaces duplicate code via structural AST matching (the *Locate Duplicates* inspection); we don't have an equivalent today. Two reasonable implementation paths:
-
-- **Method-granularity** (cheap, ships first): hash each method body's normalized AST (rename locals to `$0`/`$1`/…, drop literals, drop comments) and group methods with matching hashes. Useful for "these N methods are 90% identical — extract a shared one".
-- **Token-stream** (PMD CPD-style): tokenize each compilation unit, find runs of N+ matching tokens across files. Catches statement-level duplication that method-AST hashing misses but at higher cost.
-
-Start with the method-granularity tool; promote to token-stream if agent demand warrants. Result shape: `{operation, duplicates: [{members: [{filePath, line, methodName}, ...], similarity: 0.0–1.0, tokens: int}]}`. Read-only.
-
-**Process-death → `Failed` phase.** Manager-side: today's polling flips a dead workspace to `Stopped`, not `Failed`. The Sprint 12 plan promised the tray icon flips to 🔴 within ~5s of external kill — that path needs the polling to recognise unexpected exits (non-zero exit code, no graceful-shutdown signal seen) and set `Failed` instead. Tracked here because the fork's tray menu shows the result of that aggregation.
-
-**FQN entry point for the whole `find_*` family.** *The single most-repeated ask across every EXECSIM-Java session* (Sprint 1, 6b, 3, 4 — see `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`). `find_references` / `find_implementations` / `find_field_writes` all require a `(filePath, line, column)` triple that must resolve *in the project being searched* — so cross-project consumer mapping ("who in `project-b` uses `com.example.module.X`?") is impossible without a `Bash grep` fallback, which becomes the fast path. Add an FQN/symbol overload: `find_references(symbol="com.example.X", scope="workspace")` etc., no position needed. The workspace already has every project's index loaded — this is O(n) over symbols, not a re-parse. Closes the coordinate-bisection cost for interactive refactors. The schema-honesty + graceful-degradation half of this is filed as bug #12; this is the capability half.
-
-**`refresh_workspace` / `reindex` — consolidated spec.** Repeatedly asked (Sprint 3, 3.1, 4) and proposed independently for v1.7.2. The EXECSIM feedback sharpens the requirements — it must do *all three*, not just symbol-index refresh:
-
-1. **Refresh from disk** — pick up files created/edited via `Write`/`Edit` (the recurring "index-stale-after-Write": new package's classes invisible to `search_symbols`/`analyze_type` until reload). Sidesteps bug #6's broken watcher.
-2. **Invalidate JDT's incremental compile cache** — not just the symbol index. Without this, bug #8 (`compile_workspace` false-pass on record/signature shape change) stays open: JDT reuses class files compiled against the old signature.
-3. **Preserve workspace/`projectKey` state** — must NOT drop projects or rotate keys (today `remove_project`+`add_project` is the only knob and it resets everything, invalidating the caller's `projectKey` → bug #11). Per-project scope: `refresh_workspace(projectKey?)`.
-   Effectively this one tool also closes bug #8 and is the manual override for bug #6. Returns post-rebuild diagnostics, `compile_workspace` shape.
 
 **`copy_class` + `wrap_class` — strangler-fig cross-project migration toolset.** From EXECSIM Sprint 1 (30+ class cross-project migration). `move_class` is destructive and within-project (bug #10); real migrations need the duplicate-wrap-redirect-cap protocol:
 

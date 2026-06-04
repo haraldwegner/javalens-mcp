@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
 
-**73 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, LTK-backed structural refactorings, code generation, dependency management, and workspace-wide verification — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
+**76 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, LTK-backed structural refactorings, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
 
 Battle-tested daily on multi-project codebases via the companion **[javalens-manager](https://github.com/hw1964/javalens-manager)** desktop control plane. Improvement loop is live: features, fixes, and ergonomics ship in response to refactoring sessions in production. See the [roadmap](docs/sprints/) for what's coming and the [release notes](docs/release-notes/) for what just shipped.
 
@@ -59,7 +59,7 @@ JavaLens drives Eclipse JDT — the same engine that powers Eclipse IDE — so t
 
 ---
 
-## What's in v1.7.x
+## What's in v1.8.x
 
 ### Multi-project workspace (since v1.3)
 
@@ -93,7 +93,7 @@ Two PDE bundles loaded into one workspace where bundle A's `Require-Bundle` list
 
 ### Tool-surface progression (v1.5.0 — v1.7.0)
 
-Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
+Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 76 in v1.8.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
 
 - **`find_pattern_usages(kind, query)`** — `kind ∈ { annotation, instantiation, type_argument, cast, instanceof }`.
 - **`find_quality_issue(kind, …)`** — `kind ∈ { naming, bugs, unused, large_classes, circular_deps, reflection, throws, catches }`.
@@ -131,6 +131,27 @@ See [`docs/release-notes/v1.6.0.md`](docs/release-notes/v1.6.0.md).
 - **Ring 4 (formatter / workflow polish, 2):** `format` (file/package/project/workspace scope, honours the project's own `org.eclipse.jdt.core.prefs`) and `optimize_imports_workspace` (workspace fan-out of import optimisation, idempotent).
 
 See [`docs/release-notes/v1.7.0.md`](docs/release-notes/v1.7.0.md).
+
+### Lifecycle hygiene + agent-trust (v1.8.0)
+
+Theme: nine real-world `docs/bugs.md` entries closed, three high-leverage tools added, dependency management extended to Gradle.
+
+| Area | What landed |
+|---|---|
+| **`refresh_workspace`** | Consolidated lifecycle tool: refresh resources from disk + invalidate JDT incremental compile cache (`CLEAN_BUILD` + `FULL_BUILD`) + preserve `projectKey` state. The manual override when the file-watcher misses an external edit; closes the lifecycle gap surfaced across every real-world refactor session. |
+| **FQN overload for `find_*`** | `find_references` / `find_implementations` / `find_field_writes` / `find_method_references` now accept `symbol="com.foo.Bar"` (type), `"com.foo.Bar#method"` / `"com.foo.Bar#method(int,java.lang.String)"` (method), or `"com.foo.Bar#field"` alongside the existing `(filePath, line, column)` triple. Workspace or project scope. Closes the coordinate-bisection cost for cross-project consumer mapping. |
+| **`find_duplicate_code`** | Workspace-scoped clone detection: normalised-token sequence over every `IMethod` body, group by exact match, emit `groups` with per-instance `(filePath, line, methodName, tokenCount, similarity, sourceProject)`. Knobs: `minTokens` (default 50), `crossProject` (default false). Read-only. |
+| **Gradle dep management** | `add_dependency` / `update_dependency` / `find_unused_dependencies` now detect Gradle as a fallback when no `pom.xml` is present. Groovy DSL + Kotlin DSL handled; `pom.xml` takes precedence on hybrid projects. Caller runs `refresh_workspace` for classpath sync (Buildship target integration is v1.8.x.x). |
+| **`compile_workspace` correctness** | New `clean: bool` param (forces `CLEAN_BUILD` so record / signature shape changes don't false-pass) + new `scope: "main"\|"test"\|"both"` param (default `"both"` — test-source errors no longer silently pass). |
+| **`PROJECT_KEY_DROPPED`** | Distinct error code, 5-minute TTL drop marker. Long-lived callers can recover via `list_projects` instead of treating `INVALID_PARAMETER` as a typo. |
+| **`rename_symbol` constructor post-pass** | Renaming a type now also rewrites its constructor identifiers (JDT's path missed them). Idempotent. |
+| **`move_class` cross-project** | Files physically move on disk via the new `targetProjectKey` param (or auto-detect from the target package); `modifiedFiles` populated via `IResourceChangeListener` (the LTK Change tree is opaque for `ProcessorBasedRefactoring`). |
+| **`find_field_writes` graceful degradation** | Near-miss positions return `SUCCESS` with empty `writeLocations` + `nearbyFieldCandidates` (up to 3, ±1 line) instead of `INVALID_PARAMETER`. |
+| **`WorkspaceFileWatcher` robustness** | 50 ms debounce + event drain; `OVERFLOW` triggers unconditional reconcile; periodic mtime-fallback poll catches any silent `WatchService` miss within ≤ 2 s. |
+| **`ProjectImporter` dedupe** | Classpath entries deduped before `setRawClasspath()` — Tycho hybrid layouts that put the same jar in both `lib/` and `.classpath` load without `setRawClasspath()` rejection. |
+| **`run_tests` non-PDE path** | Explicit pre-computed runtime-classpath mementos bypass the JDT JUnit launcher's `PluginClasspathProvider` for plain Maven / Gradle / generic-Java projects. v1.7.1's `INVALID_PARAMETER`-with-workaround dispatch is removed. |
+
+See [`docs/release-notes/v1.8.0.md`](docs/release-notes/v1.8.0.md) for the full per-bug shipped notes + behaviour-change checklist.
 
 ---
 
