@@ -446,22 +446,22 @@ class ProjectImporterTest {
     @Test
     @DisplayName("readEclipseClasspath resolves '..' refs against project parent")
     void readEclipseClasspath_resolvesParentRefs(@TempDir Path tempDir) throws IOException {
-        // Mirrors the strategies-orb project layout: lib jars in a sibling dir.
-        Path projectRoot = tempDir.resolve("strategies");
+        // Mirrors a layout with lib jars in a sibling dir.
+        Path projectRoot = tempDir.resolve("project");
         Files.createDirectories(projectRoot);
-        Files.createDirectories(tempDir.resolve("jats"));
+        Files.createDirectories(tempDir.resolve("lib"));
         Files.writeString(projectRoot.resolve(".classpath"), """
             <?xml version="1.0" encoding="UTF-8"?>
             <classpath>
                 <classpathentry kind="src" path="src"/>
-                <classpathentry kind="lib" path="../jats/com.jats2.model_1.0.0.jar"/>
+                <classpathentry kind="lib" path="../lib/com.example.model_1.0.0.jar"/>
             </classpath>
             """);
 
         ProjectImporter.ClasspathInfo info = ProjectImporter.readEclipseClasspath(projectRoot);
 
         assertEquals(1, info.libPaths().size());
-        assertEquals(tempDir.resolve("jats/com.jats2.model_1.0.0.jar").normalize(),
+        assertEquals(tempDir.resolve("lib/com.example.model_1.0.0.jar").normalize(),
             info.libPaths().get(0),
             "'..' should be resolved against the project parent directory");
     }

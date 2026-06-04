@@ -25,14 +25,14 @@ class SearchSymbolsToolDedupeTest {
     @Test
     @DisplayName("dedupe: cache-path duplicate dropped, source entry kept (the bugs.md #2 canonical case)")
     void dedupe_classDefinedInOneProjectUsedInAnother_keepsOnlyEntryWithCoordinates() {
-        Map<String, Object> sourceEntry = newEntry("Class", "com.jats2.model.provider.alpol.alpaca.AlpacaFullProvider",
-            "/home/harald/Projects/jats2/com.jats2.model/src/com/jats2/model/provider/alpol/alpaca/AlpacaFullProvider.java",
+        Map<String, Object> sourceEntry = newEntry("Class", "com.example.model.provider.SampleProvider",
+            "/home/user/Projects/example/com.example.model/src/com/example/model/provider/SampleProvider.java",
             53, 6);
-        Map<String, Object> cacheEntry1 = newEntry("Class", "com.jats2.model.provider.alpol.alpaca.AlpacaFullProvider",
-            "/home/harald/.cache/javalens-manager/workspaces/JATS-ORB-WS/6d65bfe1/javalens-com.jats2.model-7e6f70c7",
+        Map<String, Object> cacheEntry1 = newEntry("Class", "com.example.model.provider.SampleProvider",
+            "/home/user/.cache/javalens-manager/workspaces/EXAMPLE-WS/6d65bfe1/javalens-com.example.model-7e6f70c7",
             null, null);
-        Map<String, Object> cacheEntry2 = newEntry("Class", "com.jats2.model.provider.alpol.alpaca.AlpacaFullProvider",
-            "/home/harald/.cache/javalens-manager/workspaces/JATS-ORB-WS/6d65bfe1/javalens-strategies_orb-7e6f70c7",
+        Map<String, Object> cacheEntry2 = newEntry("Class", "com.example.model.provider.SampleProvider",
+            "/home/user/.cache/javalens-manager/workspaces/EXAMPLE-WS/6d65bfe1/javalens-projects_other-7e6f70c7",
             null, null);
 
         List<Map<String, Object>> deduped = SearchSymbolsTool.dedupeBySymbolIdentity(

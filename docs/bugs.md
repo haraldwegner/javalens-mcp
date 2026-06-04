@@ -55,7 +55,7 @@ Add a second match branch in the visitor: when `renamingAType` is true AND the r
 
 - **Status:** FIXED in v1.8.0 *(schema-honesty + graceful-degradation + FQN-capability — all three halves shipped. Schema-honesty: all 4 find_* tool descriptions now spell out the position-based contract and document the FQN form. Graceful-degradation: find_field_writes no longer hard-refuses on near-miss positions — non-field-at-position returns SUCCESS with empty writeLocations + nearbyFieldCandidates (up to 3 fields ±1 line of the request). FQN-capability (Phase B.2): new shared `FqnResolver` resolves type / method / field FQNs via `IJavaProject.findType` + erased-name parameter matching; each of the 4 find_* tools accepts the alternative `symbol` form ("com.foo.Bar", "com.foo.Bar#method", "com.foo.Bar#method(int,java.lang.String)", "com.foo.Bar#field") plus a `scope: "workspace"|"project"` selector.)*
 - **Date observed:** 2026-05-15 / 2026-05-13 (EXECSIM-Java sessions)
-- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`, recorded in `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`
+- **Reporter:** Claude (Opus 4.7) via `jl-example-ws`, recorded in `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`
 - **Server version:** 1.7.x (2.0.0-SNAPSHOT health string)
 - **Severity:** MEDIUM — forces a `Bash grep` fallback for the single most common navigation question ("who implements / writes X?"); the misleading error reads like a caller mistake.
 
@@ -91,7 +91,7 @@ Bug-side: disclose the `filePath`/coords requirement in each `find_*` tool's sch
 
 - **Status:** FIXED in v1.8.0 *(new `PROJECT_KEY_DROPPED` error code with drop timestamp. `JdtServiceImpl.removeProject()` records a 5-minute TTL'd drop marker; `IJdtService.wasRecentlyDropped(key)` exposes the timestamp. `AbstractTool.execute()` + every tool with its own projectKey-handling path (`compile_workspace`, `run_tests`, `move_class` targetProjectKey) check `wasRecentlyDropped` before returning `INVALID_PARAMETER`, surfacing the distinct code with a hint to re-acquire via `list_projects`. Re-adding the same key clears the marker so a live project isn't shadowed.)*
 - **Date observed:** 2026-05-15 / 2026-05-16 (EXECSIM-Java Sprint 3 / 3.1)
-- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
+- **Reporter:** Claude (Opus 4.7) via `jl-example-ws`
 - **Server version:** 1.7.x
 - **Severity:** MEDIUM — a long-lived caller's `projectKey` goes stale mid-session with an error that reads like a caller bug, not a state change.
 
@@ -139,7 +139,7 @@ Filtering the `ImportRewrite` to skip imports whose only reference is a `@link` 
 
 Not yet addressed; the orchestration would naturally pair with the `copy_class` / `wrap_class` strangler-fig toolset on `docs/upgrade-checklist.md`.
 - **Date observed:** 2026-05-11 (EXECSIM-Java Sprint 1 Phase 1)
-- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
+- **Reporter:** Claude (Opus 4.7) via `jl-example-ws`
 - **Server version:** 1.7.x
 - **Severity:** MEDIUM-HIGH — silently produces broken cross-project state; the `~30 class` migration it was meant to automate falls back to manual `mv`/`rmdir`/`grep` per class.
 
@@ -171,7 +171,7 @@ Not yet addressed; the orchestration would naturally pair with the `copy_class` 
 
 - **Status:** FIXED in v1.8.0 *(new `scope: "main"|"test"|"both"` param, default `"both"`. Diagnostics are filtered by Maven src/main vs src/test convention; project-level errors always pass through. When test sources have errors and main is clean, `compile_workspace(scope="test")` surfaces them explicitly.)*
 - **Date observed:** 2026-05-17 (EXECSIM-Java Sprint 4 Stage 8.4)
-- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
+- **Reporter:** Claude (Opus 4.7) via `jl-example-ws`
 - **Server version:** 1.7.x
 - **Severity:** HIGH — `compile_workspace` is the documented fast-feedback "is it green?" tool; a signature change that breaks N test files reports clean, so a caller advances on a broken tree.
 
@@ -203,7 +203,7 @@ Add `scope: "main"|"test"|"both"` (default `"both"`, or at minimum document `"ma
 
 - **Status:** FIXED in v1.8.0 *(new `clean: bool` param, default `false`. When `clean=true`, CLEAN_BUILD precedes FULL_BUILD so JDT discards its incremental cache. Required when a record's canonical constructor shape changes, a public method's signature shape changes, or any other edit the incremental builder would skip recompiling consumers for.)*
 - **Date observed:** 2026-05-16 (EXECSIM-Java Sprint 3.1 Stage 2)
-- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
+- **Reporter:** Claude (Opus 4.7) via `jl-example-ws`
 - **Server version:** 1.7.x
 - **Severity:** HIGH — the build-status signal itself is wrong (worse than a stale *navigation* index); a caller treating `errorCount:0` as a green light advances with code that does not compile.
 
@@ -273,7 +273,7 @@ In `ProjectImporter.addDependencyEntries()` (or the upstream classpath-collectio
 ### Cross-reference
 
 - Surfaced during the v1.7.1 release smoke; the fork's own `jl-javalens-ws` workspace can't load itself with the current code.
-- Independent of v1.7.1 fixes; the duplicate-entry path would have been present in v1.7.0 too. Just wasn't tripped on the JATS-ORB-WS workspace's project set.
+- Independent of v1.7.1 fixes; the duplicate-entry path would have been present in v1.7.0 too. Just wasn't tripped on the EXAMPLE-WS workspace's project set.
 
 ---
 
@@ -386,23 +386,23 @@ Either (a) write `workspace.json` into each UUID subdir from the launcher (more 
 
 - **Status:** FIXED in v1.7.1
 - **Date observed:** 2026-05-02
-- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws` workspace
+- **Reporter:** Claude (Opus 4.7) via `jl-example-ws` workspace
 - **Server version:** 2.0.0-SNAPSHOT
 - **Severity:** LOW — labeling/UX issue; functionality works.
 
 ### Reproducer
 
 ```
-mcp__jl-jats-orb-ws__add_project /home/harald/Projects/jats2/com.jats2.model
-mcp__jl-jats-orb-ws__list_projects
+mcp__jl-example-ws__add_project /home/harald/Projects/example/com.example.model
+mcp__jl-example-ws__list_projects
 ```
 
 ### Actual
 
 ```jsonc
 {
-  "projectKey": "com-jats2-model",
-  "projectPath": "/home/harald/Projects/jats2/com.jats2.model",
+  "projectKey": "com-example-model",
+  "projectPath": "/home/harald/Projects/example/com.example.model",
   "buildSystem": "unknown",
   "sourceFileCount": 1030,
   "packageCount": 123,
@@ -503,7 +503,7 @@ Schema description rewrite:
 
 - **Status:** FIXED in v1.7.1
 - **Date observed:** 2026-05-01
-- **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws` workspace
+- **Reporter:** Claude (Opus 4.7) via `jl-example-ws` workspace
 - **Server version:** 2.0.0-SNAPSHOT
 - **Severity:** MEDIUM — pollutes search results with non-source paths, wastes user/agent attention, can mislead refactor tooling that expects every result to be a real source location.
 
@@ -524,21 +524,21 @@ Schema description rewrite:
     {
       "name": "AlpacaFullProvider",
       "kind": "Class",
-      "filePath": "/home/harald/.cache/javalens-manager/workspaces/JATS-ORB-WS/6d65bfe1/javalens-com.jats2.model-7e6f70c7",
-      "qualifiedName": "com.jats2.model.provider.alpol.alpaca.AlpacaFullProvider",
-      "package": "com.jats2.model.provider.alpol.alpaca"
+      "filePath": "/home/harald/.cache/javalens-manager/workspaces/EXAMPLE-WS/6d65bfe1/javalens-com.example.model-7e6f70c7",
+      "qualifiedName": "com.example.model.provider.SampleProvider",
+      "package": "com.example.model.provider"
     },
     {
       "name": "AlpacaFullProvider",
       "kind": "Class",
-      "filePath": "/home/harald/.cache/javalens-manager/workspaces/JATS-ORB-WS/6d65bfe1/javalens-strategies_orb-7e6f70c7",
-      "qualifiedName": "com.jats2.model.provider.alpol.alpaca.AlpacaFullProvider",
-      "package": "com.jats2.model.provider.alpol.alpaca"
+      "filePath": "/home/harald/.cache/javalens-manager/workspaces/EXAMPLE-WS/6d65bfe1/javalens-strategies_orb-7e6f70c7",
+      "qualifiedName": "com.example.model.provider.SampleProvider",
+      "package": "com.example.model.provider"
     },
     {
       "name": "AlpacaFullProvider",
       "kind": "Class",
-      "filePath": "/home/harald/Projects/jats2/com.jats2.model/src/com/jats2/model/provider/alpol/alpaca/AlpacaFullProvider.java",
+      "filePath": "/home/harald/Projects/example/com.example.model/src/com/example/model/provider/SampleProvider.java",
       "line": 53,
       "column": 6,
       ...
@@ -549,7 +549,7 @@ Schema description rewrite:
 
 The first two entries have the cache directory as their `filePath` and **no `line` / `column`** — they're not navigable source locations. The third is the real file. Same pattern observed for `TransactionProvider` (3 results: 2 cache + 1 real) and several other queries.
 
-Inconsistent across queries: a few queries (`SlotManager`, `IExecutionAlgo`) returned only the real source path with no cache duplicates. So the leak isn't universal — appears to depend on whether the symbol resolves to a class that's also referenced by a sibling project's classpath entry (here `strategies_orb` depends on `com.jats2.model` JAR, so the same class shows up under both indices' cache snapshots).
+Inconsistent across queries: a few queries (`SlotManager`, `IExecutionAlgo`) returned only the real source path with no cache duplicates. So the leak isn't universal — appears to depend on whether the symbol resolves to a class that's also referenced by a sibling project's classpath entry (here `strategies_orb` depends on `com.example.model` JAR, so the same class shows up under both indices' cache snapshots).
 
 ### Expected
 
@@ -571,19 +571,19 @@ In the search-symbols handler, after collecting candidate entries, drop those wh
 
 - **Status:** FIXED in v1.8.0 *(workaround dispatch removed; full Maven / Gradle / generic-Java launch path lands via explicit pre-computed runtime classpath that bypasses the JDT JUnit launcher's PluginClasspathProvider; end-to-end happy-path JVM-spawning verification still waits on the fixture-build pipeline, see `docs/upgrade-checklist.md` and `RunTestsToolTest`'s `@Disabled` happy tests)*
 - **Date observed:** 2026-05-01
-- **Reporter:** Claude (Sonnet 4.6 / Opus 4.7) via `jl-jats-orb-ws` workspace
+- **Reporter:** Claude (Sonnet 4.6 / Opus 4.7) via `jl-example-ws` workspace
 - **Server version:** 2.0.0-SNAPSHOT (per `health_check`)
 - **Severity:** HIGH — blocks the documented MCP-driven TDD workflow for any non-Eclipse-PDE Maven project; agents are forced to fall back to `mvn test` via the Bash tool, which defeats the purpose of having a typed MCP test runner.
 
 ### Environment
 
-- Workspace: `JATS-ORB-WS` with five loaded projects.
+- Workspace: `EXAMPLE-WS` with five loaded projects.
   - `strategies-orb` — Maven, `<sourceDirectory>strategies/src</sourceDirectory>` override.
-  - `com-jats2-model` — Eclipse PDE bundle (`buildSystem: "unknown"`).
+  - `com-example-model` — Eclipse PDE bundle (`buildSystem: "unknown"`).
   - `execsim-java` — Maven.
-  - `com-jats2-gateways-alpol` — Maven, plain `src/main/java` + `src/test/java` layout.
+  - `com-example-gateway` — Maven, plain `src/main/java` + `src/test/java` layout.
   - `orb-java` — Maven.
-- Target project for the failing call: `com-jats2-gateways-alpol` (plain Maven, JUnit 4.12, Mockito 5.5.0, Java 21).
+- Target project for the failing call: `com-example-gateway` (plain Maven, JUnit 4.12, Mockito 5.5.0, Java 21).
 
 ### Reproducer
 
@@ -594,11 +594,11 @@ In the search-symbols handler, after collecting candidate entries, drop those wh
   "arguments": {
     "scope": {
       "kind": "method",
-      "typeName": "com.jats2.gateways.alpol.alpaca.orders.OrderProcessorTest",
+      "typeName": "com.example.gateway.orders.OrderProcessorTest",
       "methodName": "cancelBeforePendingNew_isQueuedAndDrained"
     },
     "framework": "junit4",
-    "projectKey": "com-jats2-gateways-alpol",
+    "projectKey": "com-example-gateway",
     "timeoutSeconds": 60
   }
 }
@@ -643,7 +643,7 @@ In the `run_tests` handler, before assuming the target is an OSGi bundle:
 - Branch on build system (`maven` / `gradle` / `unknown` per `list_projects`) and use the right launching delegate:
   - Plain Maven / Gradle → `JUnitLaunchConfigurationDelegate` directly with the project's `IClasspathContainer` resolved by m2e / Buildship.
   - Eclipse PDE → Tycho-aware Surefire delegate (current path).
-- Surface a more actionable error message when the project type genuinely can't be resolved (e.g. `"target project com-jats2-gateways-alpol is not an OSGi bundle and has no JUnit launcher available"`) instead of bubbling an NPE as `INTERNAL_ERROR`.
+- Surface a more actionable error message when the project type genuinely can't be resolved (e.g. `"target project com-example-gateway is not an OSGi bundle and has no JUnit launcher available"`) instead of bubbling an NPE as `INTERNAL_ERROR`.
 
 ### Workaround
 
@@ -652,4 +652,4 @@ Agents should fall back to running tests via the `Bash` tool with `mvn test -Dte
 ### Cross-reference
 
 - Workaround called out in: `~/CursorProjects/strategies_orb/.claude/plans/fizzy-watching-narwhal.md` (Phase 1A verification section).
-- Production code being tested when this was hit: `com.jats2.gateways.alpol.alpaca.orders.OrderProcessor` cancel-defer-until-NEW logic for Alpaca workaround.
+- Production code being tested when this was hit: `com.example.gateway.orders.OrderProcessor` cancel-defer-until-NEW logic for Alpaca workaround.

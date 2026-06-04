@@ -904,7 +904,7 @@ public class ProjectImporter {
     /**
      * Read Eclipse .classpath at the project root.
      * Resolves &lt;classpathentry path="..."&gt; values against projectRoot
-     * (so "../jats/foo.jar"-style relative refs work).
+     * (so "../lib/foo.jar"-style relative refs work).
      * Returns ClasspathInfo.empty() if .classpath is absent or malformed.
      */
     static ClasspathInfo readEclipseClasspath(java.nio.file.Path projectRoot) {

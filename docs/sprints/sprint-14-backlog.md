@@ -118,7 +118,7 @@ Each sub-phase is a single bug closure with a focused test (or test extension) v
 
 ### A.3 `bugs.md` #13 NEW — `rename_symbol` misses constructor name on class rename
 
-**Date observed:** 2026-06-03 (ORB session, [`feedback_jats_provider_refactor_copy_strip`](file:///home/harald/.claude/projects/-home-harald-CursorProjects-ORB/memory/feedback_jats_provider_refactor_copy_strip.md)).
+**Date observed:** 2026-06-03 (ORB session).
 
 **Reproducer:** rename a Java class `Foo` → `Bar` via `rename_symbol`. The returned edit set rewrites the type name in declarations and references but leaves the constructor's identifier as `Foo`. Caller fell back to `Edit replace_all` on the class name as more complete.
 
@@ -212,8 +212,8 @@ v1.7.1 shipped the workaround dispatch (Maven side returns `INVALID_PARAMETER` w
 - Fix: for PDE projects, scan the project's `IPluginModelBase`'s required-bundle list for `org.junit` / `junit` / `org.junit.jupiter.api` to determine framework; if explicit `framework=` is passed, trust it and configure the runner shim with the workspace-level JUnit bundles instead of project-local.
 
 **Tests:**
-- `RunTestsToolMavenPathTest` — three currently-`@Disabled` happy-path tests (`happy_methodScope`, `happy_classScope`, `happy_packageScope`) flip to enabled and pass against a plain Maven fixture (`com-jats2-gateways-alpol` shape).
-- `RunTestsToolPdePathTest` — fixture mirroring `com-jats2-model`'s shape; explicit `framework="junit5"` succeeds; missing-junit-bundle case returns actionable error message (not the OSGi NPE).
+- `RunTestsToolMavenPathTest` — three currently-`@Disabled` happy-path tests (`happy_methodScope`, `happy_classScope`, `happy_packageScope`) flip to enabled and pass against a plain Maven fixture (typical multi-module Maven layout).
+- `RunTestsToolPdePathTest` — fixture mirroring an Eclipse PDE bundle layout; explicit `framework="junit5"` succeeds; missing-junit-bundle case returns actionable error message (not the OSGi NPE).
 
 ## Phase B — `refresh_workspace` + FQN-based `find_*`
 
@@ -327,7 +327,7 @@ grep -rni "jats\|orb.strateg\|orb_jats\|trading.strateg\|trading.platform" \
 
 Categories same as manager: (a) narrative scrub, (b) test-fixture renames (`jats` → `alpha`, `orb` → `beta`, `jats2` → `example`), (c) over-matches (review-as-found).
 
-Sprint-history docs (sprint-9 through sprint-13) likely have the same JATS references the manager docs had. Release notes (v1.4 through v1.7) may have workspace-name examples.
+Sprint-history docs (sprint-9 through sprint-13) likely have the same proprietary references the manager docs had. Release notes (v1.4 through v1.7) may have workspace-name examples.
 
 ### D.2 Full reactor verify
 

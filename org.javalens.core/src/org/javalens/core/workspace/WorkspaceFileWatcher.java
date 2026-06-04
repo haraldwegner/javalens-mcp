@@ -39,7 +39,7 @@ import java.util.concurrent.TimeUnit;
  * <pre>{@code
  * {
  *   "version": 1,
- *   "name": "jats",
+ *   "name": "example",
  *   "projects": [
  *     "/abs/path/to/project1",
  *     "/abs/path/to/project2"

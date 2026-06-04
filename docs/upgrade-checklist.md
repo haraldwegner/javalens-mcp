@@ -97,18 +97,20 @@ Start with the method-granularity tool; promote to token-stream if agent demand 
 
 **Process-death → `Failed` phase.** Manager-side: today's polling flips a dead workspace to `Stopped`, not `Failed`. The Sprint 12 plan promised the tray icon flips to 🔴 within ~5s of external kill — that path needs the polling to recognise unexpected exits (non-zero exit code, no graceful-shutdown signal seen) and set `Failed` instead. Tracked here because the fork's tray menu shows the result of that aggregation.
 
-**FQN entry point for the whole `find_*` family.** *The single most-repeated ask across every EXECSIM-Java session* (Sprint 1, 6b, 3, 4 — see `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`). `find_references` / `find_implementations` / `find_field_writes` all require a `(filePath, line, column)` triple that must resolve *in the project being searched* — so cross-project consumer mapping ("who in strategies-orb uses `com.orb.strategy.inference.OrbInference`?") is impossible without a `Bash grep` fallback, which becomes the fast path. Add an FQN/symbol overload: `find_references(symbol="com.orb.strategy.X", scope="workspace")` etc., no position needed. The workspace already has every project's index loaded — this is O(n) over symbols, not a re-parse. Closes the coordinate-bisection cost for interactive refactors. The schema-honesty + graceful-degradation half of this is filed as bug #12; this is the capability half.
+**FQN entry point for the whole `find_*` family.** *The single most-repeated ask across every EXECSIM-Java session* (Sprint 1, 6b, 3, 4 — see `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`). `find_references` / `find_implementations` / `find_field_writes` all require a `(filePath, line, column)` triple that must resolve *in the project being searched* — so cross-project consumer mapping ("who in `project-b` uses `com.example.module.X`?") is impossible without a `Bash grep` fallback, which becomes the fast path. Add an FQN/symbol overload: `find_references(symbol="com.example.X", scope="workspace")` etc., no position needed. The workspace already has every project's index loaded — this is O(n) over symbols, not a re-parse. Closes the coordinate-bisection cost for interactive refactors. The schema-honesty + graceful-degradation half of this is filed as bug #12; this is the capability half.
 
 **`refresh_workspace` / `reindex` — consolidated spec.** Repeatedly asked (Sprint 3, 3.1, 4) and proposed independently for v1.7.2. The EXECSIM feedback sharpens the requirements — it must do *all three*, not just symbol-index refresh:
+
 1. **Refresh from disk** — pick up files created/edited via `Write`/`Edit` (the recurring "index-stale-after-Write": new package's classes invisible to `search_symbols`/`analyze_type` until reload). Sidesteps bug #6's broken watcher.
 2. **Invalidate JDT's incremental compile cache** — not just the symbol index. Without this, bug #8 (`compile_workspace` false-pass on record/signature shape change) stays open: JDT reuses class files compiled against the old signature.
 3. **Preserve workspace/`projectKey` state** — must NOT drop projects or rotate keys (today `remove_project`+`add_project` is the only knob and it resets everything, invalidating the caller's `projectKey` → bug #11). Per-project scope: `refresh_workspace(projectKey?)`.
-Effectively this one tool also closes bug #8 and is the manual override for bug #6. Returns post-rebuild diagnostics, `compile_workspace` shape.
+   Effectively this one tool also closes bug #8 and is the manual override for bug #6. Returns post-rebuild diagnostics, `compile_workspace` shape.
 
 **`copy_class` + `wrap_class` — strangler-fig cross-project migration toolset.** From EXECSIM Sprint 1 (30+ class cross-project migration). `move_class` is destructive and within-project (bug #10); real migrations need the duplicate-wrap-redirect-cap protocol:
+
 - `copy_class(from=FQN, to=FQN)` — duplicate into the target package with the normal package-decl rewrite on the *copy*, original untouched and still referenced. Removes the `cp + sed -i package` bash step from every atomic-protocol iteration (~30 round-trips saved in one migration).
 - `wrap_class(wrapperFqn, targetFqn, deprecate=true)` — rewrite the original into a thin delegate (every public method → `return target.method(args)`, copy constructor signatures, add `@Deprecated`). Nice-to-have; wrapper bodies are simple enough that a script handles them, so lower priority than `copy_class`.
-These plus the bug #10 `move_class` fixes form a coherent "Fowler StranglerFig / Branch-by-Abstraction support" arc.
+  These plus the bug #10 `move_class` fixes form a coherent "Fowler StranglerFig / Branch-by-Abstraction support" arc.
 
 **`pre_edit_impact(filePath, line, col)` — proactive impact summary.** Asked Sprint 6b and Sprint 4 (the `change_method_signature`/`analyze_change_impact` skips that cost a parity-run iteration each). A cheap 5-line summary returned *before* an edit — "N callers in M files, K of them test files, complexity X, recently-changed by Y" — pushes impact-awareness into the default workflow without the caller remembering to invoke `analyze_change_impact` separately. Friction-reduction, not new capability; the analysis already exists, this is a packaged entry point.
 
@@ -130,12 +132,12 @@ Field notes from real agent sessions, dated. Goal: prioritise the tools that cha
 
 ### 2026-05-05 — strategies_orb Sprint 6a Wave 1 (Slot encapsulation + S-PhaseC/FixB/Gap3)
 
-Refactor across one bundle, ~50 call sites, ~30 new tests, three small architectural changes. Agent: Claude (Opus 4.7), workspace `jl-jats-orb-ws` loaded.
+Refactor across one bundle, ~50 call sites, ~30 new tests, three small architectural changes. Agent: Claude (Opus 4.7), multi-project workspace loaded.
 
 **Used and earned its keep:**
 
 - **`compile_workspace --projectKey ... --minSeverity ERROR`** — invoked 4×, sub-second clean reads. Replaces a slow `mvn clean test-compile` round-trip (≈30 s) at every checkpoint. Caught one stale-Maven-class divergence: Maven said "nothing to compile" while my edits had broken `Slot.java`; `compile_workspace` returned the real errors instantly. **This is the killer tool. Keep it fast, keep it reliable.**
-- **`find_references` / `find_implementations`** — used by Phase A research subagents. Produced a clean rewrite-surface inventory that caught 3 sites my plan had missed (`OrbJatsStrategyParityRunner:460`, `NettingGuardTest:255/258`). For any field/method whose name collides with non-Java tokens or appears in comments/strings, `find_references` beats grep on signal-to-noise.
+- **`find_references` / `find_implementations`** — used by Phase A research subagents. Produced a clean rewrite-surface inventory that caught 3 sites my plan had missed (a cross-module parity runner and a guard test). For any field/method whose name collides with non-Java tokens or appears in comments/strings, `find_references` beats grep on signal-to-noise.
 
 **Not used, despite plan calling for them:**
 
@@ -198,4 +200,4 @@ When bumping the target platform:
 4. `mvn -pl org.javalens.mcp install -DskipTests` — catches internal-API breakage in the Phase E tools.
 5. `mvn -pl org.javalens.core.tests verify` — public-API regression coverage.
 6. `mvn -pl org.javalens.mcp.tests verify` — tool-surface regression coverage.
-7. Smoke-test against a real project (e.g. JATS) through the manager. Regressions in JDT search semantics or Tycho project-import don't show up in unit tests.
+7. Smoke-test against a real project through the manager. Regressions in JDT search semantics or Tycho project-import don't show up in unit tests.

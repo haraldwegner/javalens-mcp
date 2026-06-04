@@ -65,7 +65,9 @@ public class AddDependencyTool extends AbstractTool {
             Result:
               { operation, projectKey, pomPath, added, modifiedFiles }
 
-            Maven projects only in v1.7.0; Gradle path arrives in v1.8.x.
+            Detection: pom.xml (Maven) takes precedence; falls back to
+            build.gradle / build.gradle.kts (Gradle) when no pom.xml is present.
+            For hybrid projects with both, Maven wins.
             """;
     }
 

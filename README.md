@@ -73,7 +73,7 @@ A *workspace* is a named group of Java projects loaded into one shared JavaLens 
 The manager (or any other driver) writes a JSON file at `<data-dir>/workspace.json`:
 
 ```json
-{ "version": 1, "name": "jats", "projects": ["/abs/path/a", "/abs/path/b"] }
+{ "version": 1, "name": "example", "projects": ["/abs/path/a", "/abs/path/b"] }
 ```
 
 `WorkspaceFileWatcher` picks up changes through `java.nio.file.WatchService` and reconciles the running process's project list within ~1 s. No process restart, no MCP-client reload, no agent-session refresh.
