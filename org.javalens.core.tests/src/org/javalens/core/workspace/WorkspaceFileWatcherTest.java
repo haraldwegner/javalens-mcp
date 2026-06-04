@@ -108,6 +108,60 @@ class WorkspaceFileWatcherTest {
     }
 
     @Test
+    @DisplayName("bugs.md #6: non-atomic direct write to workspace.json (no tmp+rename) is still picked up")
+    void picksUpNonAtomicDirectWrite() throws Exception {
+        Path simpleMaven = helper.getFixturePath("simple-maven");
+        writeWorkspaceJson(simpleMaven);
+
+        watcher = new WorkspaceFileWatcher(dataDir, service);
+        watcher.start();
+        assertEquals(1, service.allProjects().size());
+
+        // Bypass the atomic-rename helper: write the new contents directly to
+        // workspace.json. This is the production-suspect failure mode for
+        // bug #6 — a write pattern that doesn't go through Files.move(...
+        // ATOMIC_MOVE) and might fire different (or fewer) WatchService
+        // events. The new mtime-fallback poll guarantees reconciliation
+        // regardless of event delivery.
+        Path simpleMavenB = helper.getFixturePath("simple-maven-b");
+        String body = "{\n  \"version\": 1,\n  \"name\": \"test\",\n  \"projects\": [\n"
+            + "    \"" + simpleMaven.toAbsolutePath() + "\",\n"
+            + "    \"" + simpleMavenB.toAbsolutePath() + "\"\n"
+            + "  ]\n}\n";
+        Files.writeString(workspaceJson, body);
+
+        boolean grew = waitUntil(Duration.ofSeconds(5),
+            () -> service.allProjects().size() == 2);
+        assertTrue(grew,
+            "Watcher should pick up a non-atomic direct write within 5 s. Loaded: " +
+            service.projectKeys());
+    }
+
+    @Test
+    @DisplayName("bugs.md #6: short-fallback-poll constructor reconciles within the poll interval even if events were missed")
+    void shortFallbackPoll_reconcilesViaMtimeCheck() throws Exception {
+        Path simpleMaven = helper.getFixturePath("simple-maven");
+        writeWorkspaceJson(simpleMaven);
+
+        // Test-only constructor with 1s fallback poll.
+        watcher = new WorkspaceFileWatcher(dataDir, service, 1);
+        watcher.start();
+        assertEquals(1, service.allProjects().size());
+
+        // Modify via tmp+rename — events should fire AND the fallback would
+        // catch it within 1s if events did get missed. Either path produces
+        // the expected reconciliation.
+        Path simpleMavenB = helper.getFixturePath("simple-maven-b");
+        writeWorkspaceJson(simpleMaven, simpleMavenB);
+
+        boolean grew = waitUntil(Duration.ofSeconds(3),
+            () -> service.allProjects().size() == 2);
+        assertTrue(grew,
+            "Short-fallback-poll watcher should reconcile within 3 s. Loaded: " +
+            service.projectKeys());
+    }
+
+    @Test
     @DisplayName("malformed JSON write does not crash the watcher")
     void malformedJson_logsAndContinues() throws Exception {
         Path simpleMaven = helper.getFixturePath("simple-maven");
