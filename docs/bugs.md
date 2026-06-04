@@ -109,7 +109,7 @@ Distinct error code `PROJECT_KEY_DROPPED` with the unload reason + timestamp; ke
 
 ## #9 — `compile_workspace` never compiles test sources — reports `errorCount:0` while `mvn test-compile` fails
 
-- **Status:** OPEN
+- **Status:** FIXED in v1.8.0 *(new `scope: "main"|"test"|"both"` param, default `"both"`. Diagnostics are filtered by Maven src/main vs src/test convention; project-level errors always pass through. When test sources have errors and main is clean, `compile_workspace(scope="test")` surfaces them explicitly.)*
 - **Date observed:** 2026-05-17 (EXECSIM-Java Sprint 4 Stage 8.4)
 - **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
 - **Server version:** 1.7.x
@@ -141,7 +141,7 @@ Add `scope: "main"|"test"|"both"` (default `"both"`, or at minimum document `"ma
 
 ## #8 — `compile_workspace` false-pass on record / signature shape changes (JDT stale incremental cache)
 
-- **Status:** OPEN
+- **Status:** FIXED in v1.8.0 *(new `clean: bool` param, default `false`. When `clean=true`, CLEAN_BUILD precedes FULL_BUILD so JDT discards its incremental cache. Required when a record's canonical constructor shape changes, a public method's signature shape changes, or any other edit the incremental builder would skip recompiling consumers for.)*
 - **Date observed:** 2026-05-16 (EXECSIM-Java Sprint 3.1 Stage 2)
 - **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
 - **Server version:** 1.7.x

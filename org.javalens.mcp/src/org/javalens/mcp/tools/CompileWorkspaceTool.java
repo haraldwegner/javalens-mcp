@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -65,6 +66,8 @@ public class CompileWorkspaceTool extends AbstractTool {
               compile_workspace(projectKey="core")
               compile_workspace(minSeverity="WARNING")
               compile_workspace(includeTaskMarkers=true)
+              compile_workspace(clean=true)
+              compile_workspace(scope="test")
 
             Inputs:
             - projectKey — optional. Compile just that project; default is the
@@ -73,6 +76,16 @@ public class CompileWorkspaceTool extends AbstractTool {
               threshold are dropped from the result.
             - includeTaskMarkers — default false. When true, TODO/FIXME markers
               are included in addition to PROBLEM markers.
+            - clean — default false. When true, CLEAN_BUILD precedes FULL_BUILD
+              so JDT's incremental compile cache is invalidated. Use when a
+              record's canonical constructor shape changes or any other
+              signature-shape edit that the incremental builder would otherwise
+              skip recompiling consumers for (bugs.md #8).
+            - scope — "main" | "test" | "both" (default "both"). Filters
+              diagnostics by the source root the file lives under (Maven
+              src/main/* vs src/test/* convention). When the project compiles
+              cleanly but test sources have errors, scope="test" surfaces them
+              explicitly (bugs.md #9).
 
             Result:
               { operation, projectsCompiled, errorCount, warningCount,
@@ -96,14 +109,30 @@ public class CompileWorkspaceTool extends AbstractTool {
         properties.put("includeTaskMarkers", Map.of(
             "type", "boolean",
             "description", "Include TODO/FIXME markers (default false)."));
+        properties.put("clean", Map.of(
+            "type", "boolean",
+            "description", "When true, CLEAN_BUILD precedes FULL_BUILD so JDT's incremental compile cache is invalidated (bugs.md #8). Default false."));
+        properties.put("scope", Map.of(
+            "type", "string",
+            "enum", List.of("main", "test", "both"),
+            "description", "Filter diagnostics by source-root convention (src/main/* vs src/test/*). Default 'both' (bugs.md #9)."));
         schema.put("properties", properties);
         return withProjectKey(schema);
     }
+
+    private static final Set<String> VALID_SCOPES = Set.of("main", "test", "both");
 
     @Override
     protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
         String minSeverityRaw = getStringParam(arguments, "minSeverity", "ERROR");
         boolean includeTaskMarkers = getBooleanParam(arguments, "includeTaskMarkers", false);
+        boolean cleanFirst = getBooleanParam(arguments, "clean", false);
+        String scope = getStringParam(arguments, "scope", "both");
+
+        if (!VALID_SCOPES.contains(scope)) {
+            return ToolResponse.invalidParameter("scope",
+                "Must be 'main', 'test', or 'both'; got '" + scope + "'");
+        }
 
         int minSeverity;
         switch (minSeverityRaw.toUpperCase()) {
@@ -152,8 +181,19 @@ public class CompileWorkspaceTool extends AbstractTool {
                     // Equinox runtimes — and a full build over a workspace
                     // already loaded into memory is fast enough that the
                     // simpler / more reliable mode wins.
+                    //
+                    // Sprint 14 (bugs.md #8): when clean=true, CLEAN_BUILD
+                    // precedes FULL_BUILD so JDT discards its incremental
+                    // compile cache. Required when a record's canonical
+                    // constructor shape changes (or any other signature edit
+                    // that the incremental builder would skip recompiling
+                    // consumers for).
                     project.refreshLocal(IResource.DEPTH_INFINITE,
                         new NullProgressMonitor());
+                    if (cleanFirst) {
+                        project.build(IncrementalProjectBuilder.CLEAN_BUILD,
+                            new NullProgressMonitor());
+                    }
                     project.build(IncrementalProjectBuilder.FULL_BUILD,
                         new NullProgressMonitor());
                 } catch (Exception e) {
@@ -166,6 +206,7 @@ public class CompileWorkspaceTool extends AbstractTool {
                 for (IMarker marker : problems) {
                     int severity = marker.getAttribute(IMarker.SEVERITY, IMarker.SEVERITY_INFO);
                     if (severity < minSeverity) continue;
+                    if (!matchesScope(marker.getResource(), scope)) continue;
                     Map<String, Object> entry = describeMarker(marker, loaded, service);
                     if (entry != null) {
                         diagnostics.add(entry);
@@ -177,6 +218,7 @@ public class CompileWorkspaceTool extends AbstractTool {
                 if (includeTaskMarkers) {
                     IMarker[] tasks = project.findMarkers(IMarker.TASK, true, IResource.DEPTH_INFINITE);
                     for (IMarker task : tasks) {
+                        if (!matchesScope(task.getResource(), scope)) continue;
                         Map<String, Object> entry = describeMarker(task, loaded, service);
                         if (entry != null) diagnostics.add(entry);
                     }
@@ -198,6 +240,37 @@ public class CompileWorkspaceTool extends AbstractTool {
             log.warn("compile_workspace threw unexpectedly: {}", e.getMessage(), e);
             return ToolResponse.internalError(e);
         }
+    }
+
+    /**
+     * Sprint 14 (bugs.md #9): classify the file as main-source or test-source
+     * based on the Maven convention {@code src/main/*} vs {@code src/test/*}.
+     * Linked-folder resources inside the Eclipse workspace point at the
+     * original on-disk path via {@link IResource#getLocation()}, so the same
+     * convention still applies.
+     *
+     * <p>Falls open (no filter) when:</p>
+     * <ul>
+     *   <li>scope = "both" (the default)</li>
+     *   <li>the resource is null or has no location (project-level markers)</li>
+     *   <li>the resource doesn't sit under any {@code src/main/} or
+     *       {@code src/test/} segment (project-level errors, build-config
+     *       errors, etc.)</li>
+     * </ul>
+     */
+    private static boolean matchesScope(org.eclipse.core.resources.IResource resource, String scope) {
+        if ("both".equals(scope)) return true;
+        if (resource == null) return true;
+        org.eclipse.core.runtime.IPath location = resource.getLocation();
+        if (location == null) return true;
+        String pathStr = location.toString();
+        boolean inTest = pathStr.contains("/src/test/") || pathStr.contains("\\src\\test\\");
+        boolean inMain = pathStr.contains("/src/main/") || pathStr.contains("\\src\\main\\");
+        // Project-level markers (no main/test designation) always surface,
+        // regardless of scope — they're cross-cutting (missing classpath,
+        // broken manifest, etc.).
+        if (!inTest && !inMain) return true;
+        return "test".equals(scope) ? inTest : inMain;
     }
 
     private static Map<String, Object> describeMarker(IMarker marker,

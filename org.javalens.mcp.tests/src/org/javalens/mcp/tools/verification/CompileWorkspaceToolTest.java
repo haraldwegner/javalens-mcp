@@ -137,6 +137,111 @@ class CompileWorkspaceToolTest {
         assertEquals(4, ((Number) diag.get("line")).intValue());
     }
 
+    // ========== Sprint 14 / bugs.md #8 + #9 — clean + scope params ==========
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #8): clean=true triggers CLEAN_BUILD without errors")
+    void clean_param_accepted_andStillReturnsZeroErrorsOnCleanFixture() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("clean", true);
+        ToolResponse r = tool.execute(args);
+
+        assertTrue(r.isSuccess(),
+            "compile_workspace(clean=true) must succeed on a clean fixture; got: " + r.getError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) r.getData();
+        assertEquals(0, ((Number) data.get("errorCount")).intValue(),
+            "clean fixture must yield zero errors even after CLEAN_BUILD; diagnostics=" + data.get("diagnostics"));
+    }
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #9): scope='main' excludes test-source markers")
+    void scope_main_excludesTestSourceMarker() throws Exception {
+        attachSyntheticErrorTo("SampleTest.java", "test-source synthetic marker");
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("scope", "main");
+        ToolResponse r = tool.execute(args);
+
+        assertTrue(r.isSuccess(), "got: " + r.getError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) r.getData();
+        assertEquals(0, ((Number) data.get("errorCount")).intValue(),
+            "scope='main' must hide the test-source marker; diagnostics=" + data.get("diagnostics"));
+    }
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #9): scope='test' surfaces test-source markers only")
+    void scope_test_surfacesTestSourceMarker_excludesMainSourceMarker() throws Exception {
+        attachSyntheticErrorTo("SampleTest.java", "test-source synthetic marker");
+        attachSyntheticErrorTo("HelloWorld.java", "main-source synthetic marker");
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("scope", "test");
+        ToolResponse r = tool.execute(args);
+
+        assertTrue(r.isSuccess(), "got: " + r.getError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) r.getData();
+        assertEquals(1, ((Number) data.get("errorCount")).intValue(),
+            "scope='test' must surface exactly the test-source marker; diagnostics=" + data.get("diagnostics"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> diagnostics = (List<Map<String, Object>>) data.get("diagnostics");
+        assertEquals("test-source synthetic marker", diagnostics.get(0).get("message"));
+    }
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #9): scope='both' is the default and surfaces both main + test markers")
+    void scope_both_isDefault_andSurfacesAllMarkers() throws Exception {
+        attachSyntheticErrorTo("SampleTest.java", "test-source synthetic marker");
+        attachSyntheticErrorTo("HelloWorld.java", "main-source synthetic marker");
+
+        ObjectNode args = objectMapper.createObjectNode();
+        // No scope arg → default "both"
+        ToolResponse r = tool.execute(args);
+
+        assertTrue(r.isSuccess(), "got: " + r.getError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) r.getData();
+        assertEquals(2, ((Number) data.get("errorCount")).intValue(),
+            "default scope must surface both main and test markers; diagnostics=" + data.get("diagnostics"));
+    }
+
+    @Test
+    @DisplayName("Sprint 14 validation: unknown scope returns INVALID_PARAMETER")
+    void validation_unknownScope_returnsInvalidParameter() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("scope", "frobnicate");
+        ToolResponse r = tool.execute(args);
+
+        assertFalse(r.isSuccess(), "unknown scope must be rejected");
+        assertEquals(ErrorInfo.INVALID_PARAMETER, r.getError().getCode(),
+            "expected INVALID_PARAMETER; got: " + r.getError());
+    }
+
+    /**
+     * Attach a synthetic PROBLEM error marker to a fixture file by name.
+     * Same pattern as {@link #compileError_surfacesProblemMarker()} — bypasses
+     * the JDT build job and exercises only the marker-read + structuring code
+     * path. Tycho-test-runtime-friendly.
+     */
+    private void attachSyntheticErrorTo(String fileName, String message) throws Exception {
+        IProject project = service.getJavaProject().getProject();
+        AtomicReference<IFile> found = new AtomicReference<>();
+        project.accept(resource -> {
+            if (resource instanceof IFile f && fileName.equals(f.getName())) {
+                found.compareAndSet(null, f);
+            }
+            return true;
+        });
+        IFile target = found.get();
+        assertNotNull(target, fileName + " IFile must be present in the loaded project");
+        IMarker marker = target.createMarker(IMarker.PROBLEM);
+        marker.setAttribute(IMarker.SEVERITY, IMarker.SEVERITY_ERROR);
+        marker.setAttribute(IMarker.MESSAGE, message);
+        marker.setAttribute(IMarker.LINE_NUMBER, 1);
+    }
+
     @Test
     @DisplayName("validation: unknown projectKey returns INVALID_PARAMETER")
     void validation_unknownProjectKey_returnsInvalidParameter() {
