@@ -72,6 +72,23 @@ public class JdtServiceImpl implements IJdtService {
     private final Map<String, LoadedProject> projectsByKey = new ConcurrentHashMap<>();
     private volatile String defaultProjectKey;
 
+    /**
+     * Sprint 14 (bugs.md #11): tracks recently-removed project keys so a
+     * caller holding a stale key gets a distinct {@code PROJECT_KEY_DROPPED}
+     * error (with the drop timestamp) instead of an ambiguous
+     * {@code INVALID_PARAMETER}. Entries expire after {@link #DROP_TTL_MILLIS}
+     * so an old typo eventually falls through to the regular not-found path.
+     */
+    private final Map<String, Long> droppedKeyTimestamps = new ConcurrentHashMap<>();
+
+    /**
+     * How long {@link #droppedKeyTimestamps} retains an entry. 5 minutes is
+     * long enough for a multi-turn agent session to recognise the drop and
+     * re-acquire via {@code list_projects}, short enough that a long-past
+     * typo doesn't surface as "dropped" weeks later.
+     */
+    static final long DROP_TTL_MILLIS = 5L * 60 * 1000;
+
     // Workspace-scoped SearchService — searches across all loaded projects.
     // Lazily built on first access, invalidated whenever the project map
     // changes (addProject / removeProject / loadProject). With a single
@@ -143,6 +160,10 @@ public class JdtServiceImpl implements IJdtService {
         log.info("Adding project to workspace: {}", path);
         LoadedProject loaded = loadInternal(path);
         workspaceSearchService = null;  // scope changed — rebuild on next access
+        // bugs.md #11 (Sprint 14): re-adding a project with the same key as a
+        // previously-dropped one clears the dropped-key entry. Otherwise the
+        // dropped marker would shadow the live project until TTL expiry.
+        droppedKeyTimestamps.remove(loaded.projectKey());
         if (defaultProjectKey == null) {
             // First project ever — promote to default so single-project
             // tools have something to read.
@@ -151,6 +172,34 @@ public class JdtServiceImpl implements IJdtService {
         }
         log.info("Project added at {} with key '{}'", loaded.loadedAt(), loaded.projectKey());
         return loaded;
+    }
+
+    /**
+     * Sprint 14 (bugs.md #11): if a caller holds a {@code projectKey} that
+     * USED to be valid but has been dropped, return the drop timestamp for
+     * up to {@link #DROP_TTL_MILLIS} after the drop. Past the TTL, the entry
+     * is evicted and this returns {@link Optional#empty()}.
+     */
+    @Override
+    public Optional<Long> wasRecentlyDropped(String projectKey) {
+        Long ts = droppedKeyTimestamps.get(projectKey);
+        if (ts == null) return Optional.empty();
+        if (System.currentTimeMillis() - ts > DROP_TTL_MILLIS) {
+            droppedKeyTimestamps.remove(projectKey, ts);
+            return Optional.empty();
+        }
+        return Optional.of(ts);
+    }
+
+    /**
+     * Test-only: forcibly expire a dropped-key entry by setting its
+     * timestamp far enough in the past that {@link #wasRecentlyDropped}
+     * sees it as expired on the next call. Lets the dedicated TTL test run
+     * without sleeping for {@link #DROP_TTL_MILLIS}.
+     */
+    void expireDroppedKeyForTest(String projectKey) {
+        droppedKeyTimestamps.computeIfPresent(projectKey,
+            (k, v) -> System.currentTimeMillis() - DROP_TTL_MILLIS - 1);
     }
 
     /**
@@ -165,6 +214,9 @@ public class JdtServiceImpl implements IJdtService {
         if (removed == null) {
             return false;
         }
+        // bugs.md #11 (Sprint 14): record the drop so a stale caller gets a
+        // distinct PROJECT_KEY_DROPPED instead of INVALID_PARAMETER.
+        droppedKeyTimestamps.put(projectKey, System.currentTimeMillis());
         workspaceSearchService = null;  // scope changed — rebuild on next access
         // Sprint 11 Phase B: drop bundle registrations contributed by this project.
         workspaceManager.unregisterBundlesForProject(removed.javaProject().getProject());

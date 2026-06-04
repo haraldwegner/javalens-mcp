@@ -113,6 +113,13 @@ public abstract class AbstractTool implements Tool {
         if (projectKey != null) {
             Optional<LoadedProject> scoped = service.getProject(projectKey);
             if (scoped.isEmpty()) {
+                // bugs.md #11 (Sprint 14): distinguish "dropped recently"
+                // from "never existed" so an agent can recover via
+                // list_projects rather than treating the key as a typo.
+                Optional<Long> dropped = service.wasRecentlyDropped(projectKey);
+                if (dropped.isPresent()) {
+                    return ToolResponse.projectKeyDropped(projectKey, dropped.get());
+                }
                 return ToolResponse.invalidParameter(
                     "projectKey",
                     "Unknown projectKey '" + projectKey + "'. Use list_projects to see available keys.");

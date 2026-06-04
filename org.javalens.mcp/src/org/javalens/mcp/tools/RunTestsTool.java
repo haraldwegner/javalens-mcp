@@ -163,6 +163,10 @@ public class RunTestsTool extends AbstractTool {
         if (projectKey != null && !projectKey.isBlank()) {
             Optional<LoadedProject> scoped = service.getProject(projectKey);
             if (scoped.isEmpty()) {
+                Optional<Long> dropped = service.wasRecentlyDropped(projectKey);
+                if (dropped.isPresent()) {
+                    return ToolResponse.projectKeyDropped(projectKey, dropped.get());
+                }
                 return ToolResponse.invalidParameter("projectKey",
                     "Unknown projectKey '" + projectKey + "'. Use list_projects.");
             }

@@ -154,6 +154,14 @@ public class CompileWorkspaceTool extends AbstractTool {
         if (projectKey != null && !projectKey.isBlank()) {
             Optional<LoadedProject> scoped = service.getProject(projectKey);
             if (scoped.isEmpty()) {
+                // bugs.md #11 (Sprint 14): same dropped-vs-typo distinction
+                // as AbstractTool.execute. AbstractTool doesn't fire for this
+                // tool because compile_workspace handles its own projectKey
+                // (it needs unscoped allProjects() when none is set).
+                Optional<Long> dropped = service.wasRecentlyDropped(projectKey);
+                if (dropped.isPresent()) {
+                    return ToolResponse.projectKeyDropped(projectKey, dropped.get());
+                }
                 return ToolResponse.invalidParameter("projectKey",
                     "Unknown projectKey '" + projectKey + "'. Use list_projects.");
             }

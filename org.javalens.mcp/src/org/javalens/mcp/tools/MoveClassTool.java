@@ -161,6 +161,12 @@ public class MoveClassTool extends AbstractRefactoringTool {
             IJavaProject targetProject = resolveTargetProject(
                 service, sourceProject, targetProjectKey, targetPackage);
             if (targetProject == null) {
+                // bugs.md #11 (Sprint 14): distinguish dropped from typo
+                // for the explicit-targetProjectKey path.
+                Optional<Long> dropped = service.wasRecentlyDropped(targetProjectKey);
+                if (dropped.isPresent()) {
+                    return ToolResponse.projectKeyDropped(targetProjectKey, dropped.get());
+                }
                 return ToolResponse.invalidParameter("targetProjectKey",
                     "Unknown targetProjectKey '" + targetProjectKey + "'. Use list_projects.");
             }
@@ -205,6 +211,12 @@ public class MoveClassTool extends AbstractRefactoringTool {
      *   <li>Fallback: source project (preserves the v1.7.0 intra-project
      *       behaviour when no cross-project hint is given).</li>
      * </ol>
+     */
+    /**
+     * Returns the resolved target project, or {@code null} if an explicit
+     * {@code targetProjectKey} doesn't match a loaded project. The caller
+     * checks {@link IJdtService#wasRecentlyDropped(String)} on a null result
+     * to surface PROJECT_KEY_DROPPED (bugs.md #11) vs INVALID_PARAMETER.
      */
     private static IJavaProject resolveTargetProject(IJdtService service,
                                                      IJavaProject sourceProject,

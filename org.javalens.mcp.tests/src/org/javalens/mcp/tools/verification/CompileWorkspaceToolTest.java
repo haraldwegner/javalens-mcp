@@ -255,4 +255,23 @@ class CompileWorkspaceToolTest {
         assertEquals(ErrorInfo.INVALID_PARAMETER, err.getCode(),
             "expected INVALID_PARAMETER; got: " + err);
     }
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #11): projectKey that was loaded and then removed returns PROJECT_KEY_DROPPED, not INVALID_PARAMETER")
+    void droppedProjectKey_returnsProjectKeyDropped() {
+        String key = service.allProjects().iterator().next().projectKey();
+        assertTrue(service.removeProject(key), "fixture key should remove cleanly");
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("projectKey", key);
+        ToolResponse r = tool.execute(args);
+
+        assertFalse(r.isSuccess(), "dropped projectKey must be rejected");
+        ErrorInfo err = r.getError();
+        assertNotNull(err);
+        assertEquals(ErrorInfo.PROJECT_KEY_DROPPED, err.getCode(),
+            "expected PROJECT_KEY_DROPPED for a previously-loaded key; got: " + err);
+        assertTrue(err.getMessage().contains(key),
+            "error message should name the dropped projectKey; got: " + err.getMessage());
+    }
 }

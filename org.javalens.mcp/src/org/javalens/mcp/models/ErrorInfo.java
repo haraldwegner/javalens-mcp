@@ -42,6 +42,15 @@ public class ErrorInfo {
     public static final String SYMBOL_NOT_FOUND = "SYMBOL_NOT_FOUND";
     public static final String INVALID_COORDINATES = "INVALID_COORDINATES";
     public static final String INVALID_PARAMETER = "INVALID_PARAMETER";
+    /**
+     * Sprint 14 (bugs.md #11): the projectKey passed by the caller WAS valid
+     * earlier in this session but has since been dropped (e.g. via
+     * remove_project or a manager-side workspace mutation). Distinct from
+     * INVALID_PARAMETER so an agent can detect the workspace-state shift and
+     * re-acquire via {@code list_projects} instead of treating the key as a
+     * typo. The error message carries the drop timestamp.
+     */
+    public static final String PROJECT_KEY_DROPPED = "PROJECT_KEY_DROPPED";
     public static final String SECURITY_VIOLATION = "SECURITY_VIOLATION";
     public static final String TIMEOUT = "TIMEOUT";
     public static final String INTERNAL_ERROR = "INTERNAL_ERROR";
@@ -85,6 +94,15 @@ public class ErrorInfo {
             INVALID_PARAMETER,
             String.format("Invalid parameter '%s': %s", param, reason),
             null
+        );
+    }
+
+    public static ErrorInfo projectKeyDropped(String projectKey, long droppedAtMillis) {
+        String when = java.time.Instant.ofEpochMilli(droppedAtMillis).toString();
+        return new ErrorInfo(
+            PROJECT_KEY_DROPPED,
+            String.format("Project '%s' was unloaded at %s", projectKey, when),
+            "Re-acquire via list_projects; the workspace's loaded-project set changed mid-session."
         );
     }
 

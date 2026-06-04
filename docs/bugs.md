@@ -89,7 +89,7 @@ Bug-side: disclose the `filePath`/coords requirement in each `find_*` tool's sch
 
 ## #11 — Acquired `projectKey` silently invalidated by workspace-state mutation; fails with misleading `INVALID_PARAMETER`
 
-- **Status:** OPEN
+- **Status:** FIXED in v1.8.0 *(new `PROJECT_KEY_DROPPED` error code with drop timestamp. `JdtServiceImpl.removeProject()` records a 5-minute TTL'd drop marker; `IJdtService.wasRecentlyDropped(key)` exposes the timestamp. `AbstractTool.execute()` + every tool with its own projectKey-handling path (`compile_workspace`, `run_tests`, `move_class` targetProjectKey) check `wasRecentlyDropped` before returning `INVALID_PARAMETER`, surfacing the distinct code with a hint to re-acquire via `list_projects`. Re-adding the same key clears the marker so a live project isn't shadowed.)*
 - **Date observed:** 2026-05-15 / 2026-05-16 (EXECSIM-Java Sprint 3 / 3.1)
 - **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
 - **Server version:** 1.7.x

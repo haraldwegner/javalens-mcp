@@ -263,4 +263,9 @@ public class ScopedJdtService implements IJdtService {
     public boolean removeProject(String projectKey) {
         return delegate.removeProject(projectKey);
     }
+
+    @Override
+    public Optional<Long> wasRecentlyDropped(String projectKey) {
+        return delegate.wasRecentlyDropped(projectKey);
+    }
 }

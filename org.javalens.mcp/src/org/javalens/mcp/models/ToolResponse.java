@@ -124,6 +124,14 @@ public class ToolResponse {
     }
 
     /**
+     * bugs.md #11 (Sprint 14): create a PROJECT_KEY_DROPPED error for a key
+     * that was valid earlier in the session but has since been unloaded.
+     */
+    public static ToolResponse projectKeyDropped(String projectKey, long droppedAtMillis) {
+        return error(ErrorInfo.projectKeyDropped(projectKey, droppedAtMillis));
+    }
+
+    /**
      * Create a security violation error.
      */
     public static ToolResponse securityViolation(String reason) {

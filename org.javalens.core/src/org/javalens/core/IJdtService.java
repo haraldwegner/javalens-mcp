@@ -174,6 +174,20 @@ public interface IJdtService {
         return Optional.empty();
     }
 
+    /**
+     * Sprint 14 (bugs.md #11): if a caller holds a {@code projectKey} that
+     * USED to be valid but has been dropped (e.g. via
+     * {@link #removeProject(String)} or a manager-side workspace mutation),
+     * this returns the drop timestamp (milliseconds since the epoch) for up
+     * to a TTL window after the drop. After the TTL window the entry is
+     * evicted and this returns {@link Optional#empty()} — distinguishing
+     * "dropped recently" from "never existed" so the caller can surface
+     * {@code PROJECT_KEY_DROPPED} instead of a generic {@code INVALID_PARAMETER}.
+     */
+    default Optional<Long> wasRecentlyDropped(String projectKey) {
+        return Optional.empty();
+    }
+
     /** Keys of all currently loaded projects. */
     default Collection<String> projectKeys() {
         return List.of();
