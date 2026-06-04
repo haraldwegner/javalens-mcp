@@ -105,9 +105,14 @@ public class UpdateDependencyTool extends AbstractTool {
 
             Path pom = MavenPomSupport.locatePom(project);
             if (pom == null) {
+                // Sprint 14 Phase C (v1.8.0): try Gradle path.
+                Path buildFile = GradleBuildSupport.locateBuildFile(project);
+                if (buildFile != null) {
+                    return updateInGradle(service, project, buildFile, groupId, artifactId, newVersion);
+                }
                 return ToolResponse.invalidParameter("projectKey",
-                    "Project '" + project.projectKey() + "' is not a Maven project "
-                        + "(no pom.xml at project root). Gradle support arrives in v1.8.x.");
+                    "Project '" + project.projectKey() + "' is neither Maven "
+                        + "(no pom.xml at root) nor Gradle (no build.gradle / build.gradle.kts).");
             }
 
             String original = Files.readString(pom, StandardCharsets.UTF_8);
@@ -188,6 +193,50 @@ public class UpdateDependencyTool extends AbstractTool {
         Pattern p = Pattern.compile("<" + tag + ">\\s*(.*?)\\s*</" + tag + ">", Pattern.DOTALL);
         Matcher m = p.matcher(depBlockInside);
         return m.find() && value.equals(m.group(1).trim());
+    }
+
+    /**
+     * Sprint 14 Phase C (v1.8.0): text-level Gradle version-bump. Same
+     * Buildship-deferred caveat as add_dependency — caller runs
+     * refresh_workspace for classpath sync.
+     */
+    private ToolResponse updateInGradle(IJdtService service, LoadedProject project,
+                                         Path buildFile, String groupId, String artifactId,
+                                         String newVersion) throws Exception {
+        String original = Files.readString(buildFile, StandardCharsets.UTF_8);
+        GradleBuildSupport.UpdateGradleResult result =
+            GradleBuildSupport.updateVersion(original, groupId, artifactId, newVersion);
+        if (result == null) {
+            return ToolResponse.invalidParameter("groupId/artifactId",
+                "No Gradle dependency matching " + groupId + ":" + artifactId
+                    + " found in " + buildFile + ". Use add_dependency to introduce it.");
+        }
+        Files.writeString(buildFile, result.updatedText(), StandardCharsets.UTF_8);
+
+        try {
+            project.javaProject().getProject().refreshLocal(
+                IResource.DEPTH_INFINITE, new NullProgressMonitor());
+        } catch (Exception ignore) {}
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("operation", "update_dependency");
+        data.put("projectKey", project.projectKey());
+        data.put("buildFilePath", service.getPathUtils().formatPath(buildFile));
+        Map<String, String> updated = new LinkedHashMap<>();
+        updated.put("groupId", groupId);
+        updated.put("artifactId", artifactId);
+        updated.put("oldVersion", result.oldVersion());
+        updated.put("newVersion", newVersion);
+        data.put("updated", updated);
+        data.put("modifiedFiles", List.of(Map.of(
+            "filePath", data.get("buildFilePath"),
+            "summary", "bumped " + groupId + ":" + artifactId
+                + " from " + result.oldVersion() + " to " + newVersion)));
+        data.put("warnings", List.of(
+            "Buildship classpath sync NOT performed; call refresh_workspace to refresh classpath."));
+
+        return ToolResponse.success(data, ResponseMeta.builder()
+            .totalCount(1).returnedCount(1).build());
     }
 
     private LoadedProject pickProject(IJdtService service, JsonNode arguments) {

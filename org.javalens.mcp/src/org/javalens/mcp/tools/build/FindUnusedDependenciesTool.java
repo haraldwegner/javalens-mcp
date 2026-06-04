@@ -99,15 +99,19 @@ public class FindUnusedDependenciesTool extends AbstractTool {
 
             Path pom = MavenPomSupport.locatePom(project);
             if (pom == null) {
+                // Sprint 14 Phase C (v1.8.0): try Gradle path.
+                Path buildFile = GradleBuildSupport.locateBuildFile(project);
+                if (buildFile != null) {
+                    return findUnusedInGradle(project, buildFile);
+                }
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("operation", "find_unused_dependencies");
                 data.put("projectKey", project.projectKey());
-                data.put("projectKind", "non-maven");
+                data.put("projectKind", "unknown");
                 data.put("unusedDependencies", List.of());
                 data.put("warnings", List.of(
-                    "Project '" + project.projectKey() + "' is not a Maven project "
-                        + "(no pom.xml). This tool currently supports Maven only; "
-                        + "Gradle support arrives in v1.8.x."));
+                    "Project '" + project.projectKey() + "' is neither Maven "
+                        + "(no pom.xml) nor Gradle (no build.gradle / build.gradle.kts)."));
                 return ToolResponse.success(data, ResponseMeta.builder()
                     .totalCount(0).returnedCount(0).build());
             }
@@ -172,6 +176,54 @@ public class FindUnusedDependenciesTool extends AbstractTool {
             }
         }
         return out;
+    }
+
+    /**
+     * Sprint 14 Phase C (v1.8.0): text-level Gradle unused-dependency
+     * heuristic. Same group/artifact-vs-import comparison as the Maven
+     * path; only the dependency parser differs.
+     */
+    private ToolResponse findUnusedInGradle(LoadedProject project, Path buildFile)
+            throws Exception {
+        List<GradleBuildSupport.DeclaredGradleDep> declared =
+            GradleBuildSupport.readDependencies(buildFile);
+        Set<String> imports = collectImports(project.javaProject());
+
+        List<Map<String, Object>> unused = new ArrayList<>();
+        for (GradleBuildSupport.DeclaredGradleDep dep : declared) {
+            if (isUsedGradle(dep, imports)) continue;
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("groupId", dep.groupId());
+            entry.put("artifactId", dep.artifactId());
+            entry.put("version", dep.version());
+            entry.put("configuration", dep.configuration());
+            unused.add(entry);
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("operation", "find_unused_dependencies");
+        data.put("projectKey", project.projectKey());
+        data.put("projectKind", "gradle");
+        data.put("totalDeclared", declared.size());
+        data.put("unusedDependencies", unused);
+        data.put("warnings", List.of(
+            "Heuristic match: false positives possible. Sanity-check before deleting. "
+                + "Gradle path uses text-level parsing; version-catalog refs "
+                + "(libs.xxx) and platform/BOM entries are not detected."));
+
+        return ToolResponse.success(data, ResponseMeta.builder()
+            .totalCount(unused.size()).returnedCount(unused.size()).build());
+    }
+
+    private static boolean isUsedGradle(GradleBuildSupport.DeclaredGradleDep dep,
+                                         Set<String> imports) {
+        String groupId = dep.groupId();
+        String artifactDots = dep.artifactId().replace('-', '.');
+        for (String imp : imports) {
+            if (imp.startsWith(groupId + ".") || imp.equals(groupId)) return true;
+            if (imp.contains(artifactDots)) return true;
+        }
+        return false;
     }
 
     private LoadedProject pickProject(IJdtService service, JsonNode arguments) {

@@ -113,9 +113,14 @@ public class AddDependencyTool extends AbstractTool {
 
             Path pom = MavenPomSupport.locatePom(project);
             if (pom == null) {
+                // Sprint 14 Phase C (v1.8.0): try Gradle path.
+                Path buildFile = GradleBuildSupport.locateBuildFile(project);
+                if (buildFile != null) {
+                    return addToGradle(service, project, buildFile, groupId, artifactId, version, scope);
+                }
                 return ToolResponse.invalidParameter("projectKey",
-                    "Project '" + project.projectKey() + "' is not a Maven project "
-                        + "(no pom.xml at project root). Gradle support arrives in v1.8.x.");
+                    "Project '" + project.projectKey() + "' is neither Maven "
+                        + "(no pom.xml at root) nor Gradle (no build.gradle / build.gradle.kts).");
             }
 
             List<MavenPomSupport.DeclaredDep> existing = MavenPomSupport.readDependencies(pom);
@@ -212,6 +217,75 @@ public class AddDependencyTool extends AbstractTool {
             return pom.substring(0, closingProject) + block + pom.substring(closingProject);
         }
         return null;
+    }
+
+    /**
+     * Sprint 14 Phase C (v1.8.0): text-level Gradle dep insertion. Maps
+     * Maven {@code scope} → Gradle {@code configuration} (compile→
+     * implementation, test→testImplementation, etc.). Post-edit Buildship
+     * classpath sync is intentionally NOT performed (target-platform
+     * integration deferred); caller should run {@code refresh_workspace}
+     * to pick up the new classpath.
+     */
+    private ToolResponse addToGradle(IJdtService service, LoadedProject project,
+                                      Path buildFile, String groupId, String artifactId,
+                                      String version, String scope) throws Exception {
+        String configuration = mavenScopeToGradleConfig(scope);
+        boolean kts = GradleBuildSupport.isKotlinDsl(buildFile);
+
+        java.util.List<GradleBuildSupport.DeclaredGradleDep> existing =
+            GradleBuildSupport.readDependencies(buildFile);
+        if (GradleBuildSupport.hasDependency(existing, groupId, artifactId)) {
+            return ToolResponse.invalidParameter("groupId/artifactId",
+                "Dependency " + groupId + ":" + artifactId
+                    + " is already declared in " + buildFile
+                    + ". Use update_dependency to change the version.");
+        }
+
+        String original = Files.readString(buildFile, StandardCharsets.UTF_8);
+        String updated = GradleBuildSupport.insertDependency(
+            original, groupId, artifactId, version, configuration, kts);
+        if (updated == null) {
+            return ToolResponse.invalidParameter("projectKey",
+                "Could not unambiguously locate the dependencies { … } block in " + buildFile);
+        }
+        Files.writeString(buildFile, updated, StandardCharsets.UTF_8);
+
+        try {
+            project.javaProject().getProject().refreshLocal(
+                IResource.DEPTH_INFINITE, new NullProgressMonitor());
+        } catch (Exception ignore) {}
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("operation", "add_dependency");
+        data.put("projectKey", project.projectKey());
+        data.put("buildFilePath", service.getPathUtils().formatPath(buildFile));
+        Map<String, String> added = new LinkedHashMap<>();
+        added.put("groupId", groupId);
+        added.put("artifactId", artifactId);
+        added.put("version", version);
+        added.put("configuration", configuration);
+        data.put("added", added);
+        data.put("modifiedFiles", List.of(Map.of(
+            "filePath", data.get("buildFilePath"),
+            "summary", "added " + configuration + " " + groupId + ":" + artifactId + ":" + version)));
+        data.put("warnings", List.of(
+            "Buildship classpath sync NOT performed (target-platform integration deferred). "
+                + "Call refresh_workspace to pick up the new dependency on the Java classpath."));
+
+        return ToolResponse.success(data, ResponseMeta.builder()
+            .totalCount(1).returnedCount(1).build());
+    }
+
+    static String mavenScopeToGradleConfig(String mavenScope) {
+        if (mavenScope == null) return "implementation";
+        return switch (mavenScope.toLowerCase()) {
+            case "test" -> "testImplementation";
+            case "provided" -> "compileOnly";
+            case "runtime" -> "runtimeOnly";
+            case "compile", "import", "system" -> "implementation";
+            default -> "implementation";
+        };
     }
 
     private LoadedProject pickProject(IJdtService service, JsonNode arguments) {
