@@ -163,4 +163,16 @@ class FindImplementationsToolTest {
 
         assertNotNull(response);
     }
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #12): schema description discloses position-based contract + v1.8.0 FQN overload hint")
+    void schemaDescription_disclosesPositionContract() {
+        String desc = tool.getDescription();
+        assertTrue(desc.contains("filePath, line, column"),
+            "description must spell out the (filePath, line, column) triple; got:\n" + desc);
+        assertTrue(desc.contains("ZERO-BASED"),
+            "description must keep the zero-based coordinate warning; got:\n" + desc);
+        assertTrue(desc.contains("v1.8.0"),
+            "description must flag the upcoming v1.8.0 FQN overload; got:\n" + desc);
+    }
 }

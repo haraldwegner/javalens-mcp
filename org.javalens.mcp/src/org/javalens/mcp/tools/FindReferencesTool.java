@@ -44,8 +44,14 @@ public class FindReferencesTool extends AbstractTool {
         return """
             Find all references to a symbol across the project.
 
-            USAGE: Position on symbol, find all usages
-            OUTPUT: List of reference locations with context
+            INPUT CONTRACT: position-based (Sprint 14 schema-honesty pass —
+            bugs.md #12). The (filePath, line, column) triple is REQUIRED and
+            must point at a declared symbol (type, method, field, etc.). A
+            type-scoped / FQN-based overload is coming in v1.8.0 — for now,
+            pass position coordinates only.
+
+            USAGE: Position on symbol, find all usages.
+            OUTPUT: List of reference locations with context.
 
             IMPORTANT: Uses ZERO-BASED coordinates.
 

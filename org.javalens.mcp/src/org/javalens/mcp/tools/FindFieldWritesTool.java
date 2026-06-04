@@ -5,6 +5,12 @@ import org.eclipse.core.runtime.IPath;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.IField;
 import org.eclipse.jdt.core.IJavaElement;
+import org.eclipse.jdt.core.dom.AST;
+import org.eclipse.jdt.core.dom.ASTParser;
+import org.eclipse.jdt.core.dom.ASTVisitor;
+import org.eclipse.jdt.core.dom.CompilationUnit;
+import org.eclipse.jdt.core.dom.FieldDeclaration;
+import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
 import org.eclipse.jdt.core.search.SearchMatch;
 import org.javalens.core.IJdtService;
 import org.javalens.mcp.models.ResponseMeta;
@@ -44,10 +50,24 @@ public class FindFieldWritesTool extends AbstractTool {
         return """
             Find all write accesses (mutations) to a field.
 
-            USAGE: Position cursor on a field declaration or reference
-            OUTPUT: List of locations where the field is modified
+            INPUT CONTRACT: position-based (Sprint 14 schema-honesty pass —
+            bugs.md #12). The (filePath, line, column) triple is REQUIRED and
+            must point at a field declaration or reference. A type-scoped /
+            FQN-based overload is coming in v1.8.0 — for now, pass position
+            coordinates only.
+
+            USAGE: Position cursor on a field declaration or reference.
+            OUTPUT: List of locations where the field is modified.
 
             IMPORTANT: Uses ZERO-BASED coordinates.
+
+            Sprint 14 graceful degradation: when the (filePath, line, column)
+            position does NOT resolve to a field — either no symbol at all, or
+            a non-field symbol (method, type, local variable, …) — the
+            response is a SUCCESS with empty writeLocations PLUS a
+            `nearbyFieldCandidates` list (up to 3 fields declared within ±1
+            line of the requested position, each with name + line + column).
+            Re-call with one of those coordinates if the position was off.
 
             Unlike find_references which returns all usages, this returns only
             locations where the field value is changed (assignments, increments, etc).
@@ -109,15 +129,15 @@ public class FindFieldWritesTool extends AbstractTool {
             // Get element at position
             IJavaElement element = service.getElementAtPosition(path, line, column);
 
-            if (element == null) {
-                return ToolResponse.symbolNotFound("No symbol found at position");
+            // Sprint 14 (bugs.md #12): graceful degradation for no-symbol
+            // OR wrong-kind-of-symbol. Return success with empty
+            // writeLocations and a nearbyFieldCandidates list so the agent
+            // can re-call with corrected coordinates instead of bouncing
+            // off a hard refusal.
+            if (element == null || !(element instanceof IField)) {
+                return buildNearbyCandidatesResponse(service, path, line, element);
             }
-
-            // Verify it's a field
-            if (!(element instanceof IField field)) {
-                return ToolResponse.invalidParameter("position",
-                    "Symbol at position is not a field (found: " + getElementKind(element) + ")");
-            }
+            IField field = (IField) element;
 
             // Use SearchService for indexed write access search
             List<SearchMatch> matches = service.getSearchService()
@@ -212,5 +232,76 @@ public class FindFieldWritesTool extends AbstractTool {
             case IJavaElement.LOCAL_VARIABLE -> "Variable";
             default -> "Unknown";
         };
+    }
+
+    /**
+     * Sprint 14 (bugs.md #12): build a success response with empty
+     * writeLocations and a {@code nearbyFieldCandidates} list (up to 3
+     * fields declared within ±1 line of the requested position). The agent
+     * can pick one and re-call with its coordinates.
+     */
+    private ToolResponse buildNearbyCandidatesResponse(IJdtService service, Path filePath,
+                                                       int requestedLine, IJavaElement foundElement) {
+        List<Map<String, Object>> candidates = findNearbyFieldCandidates(service, filePath, requestedLine);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("field", null);
+        data.put("totalWriteLocations", 0);
+        data.put("writeLocations", List.of());
+        String note;
+        if (foundElement == null) {
+            note = "No symbol at the requested position. See nearbyFieldCandidates for fields nearby.";
+        } else {
+            note = "Symbol at position is " + getElementKind(foundElement)
+                + " (not a field). See nearbyFieldCandidates for fields nearby.";
+        }
+        data.put("note", note);
+        data.put("nearbyFieldCandidates", candidates);
+
+        return ToolResponse.success(data, ResponseMeta.builder()
+            .totalCount(0)
+            .returnedCount(0)
+            .build());
+    }
+
+    private List<Map<String, Object>> findNearbyFieldCandidates(IJdtService service,
+                                                                 Path filePath,
+                                                                 int requestedLine) {
+        List<Map<String, Object>> candidates = new ArrayList<>();
+        try {
+            ICompilationUnit cu = service.getCompilationUnit(filePath);
+            if (cu == null) return candidates;
+            ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+            parser.setSource(cu);
+            parser.setResolveBindings(false);
+            CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+
+            ast.accept(new ASTVisitor() {
+                @Override
+                public boolean visit(FieldDeclaration node) {
+                    if (candidates.size() >= 3) return false;
+                    for (Object f : node.fragments()) {
+                        if (candidates.size() >= 3) break;
+                        if (f instanceof VariableDeclarationFragment frag) {
+                            int startPos = frag.getName().getStartPosition();
+                            int fragLine = ast.getLineNumber(startPos) - 1;
+                            if (Math.abs(fragLine - requestedLine) <= 1) {
+                                Map<String, Object> entry = new LinkedHashMap<>();
+                                entry.put("name", frag.getName().getIdentifier());
+                                entry.put("line", fragLine);
+                                entry.put("column", ast.getColumnNumber(startPos));
+                                candidates.add(entry);
+                            }
+                        }
+                    }
+                    // Don't descend into the field's initializer expressions —
+                    // we only want declared field names at top-of-class.
+                    return false;
+                }
+            });
+        } catch (Exception e) {
+            log.debug("Failed to compute nearby field candidates: {}", e.getMessage());
+        }
+        return candidates;
     }
 }

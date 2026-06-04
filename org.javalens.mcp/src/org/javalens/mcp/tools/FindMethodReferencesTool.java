@@ -38,8 +38,14 @@ public class FindMethodReferencesTool extends AbstractTool {
 
             JDT-UNIQUE: This fine-grained search is not available in LSP.
 
-            USAGE: Position on a method, or provide method details
-            OUTPUT: All locations where the method is used as a method reference
+            INPUT CONTRACT: position-based (Sprint 14 schema-honesty pass —
+            bugs.md #12). The (filePath, line, column) triple is REQUIRED and
+            must point at a method declaration or reference. A type-scoped /
+            FQN-based overload is coming in v1.8.0 — for now, pass position
+            coordinates only.
+
+            USAGE: Position on a method, or provide method details.
+            OUTPUT: All locations where the method is used as a method reference.
 
             Useful for:
             - Understanding functional programming patterns

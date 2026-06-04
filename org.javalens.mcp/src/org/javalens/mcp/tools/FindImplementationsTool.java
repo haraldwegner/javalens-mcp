@@ -43,8 +43,14 @@ public class FindImplementationsTool extends AbstractTool {
         return """
             Find implementations of an interface or extensions of a class.
 
-            USAGE: Position on a type (interface or class), find all implementors/subclasses
-            OUTPUT: List of implementing/extending types with locations
+            INPUT CONTRACT: position-based (Sprint 14 schema-honesty pass —
+            bugs.md #12). The (filePath, line, column) triple is REQUIRED and
+            must point at a type (interface or class). A type-scoped /
+            FQN-based overload is coming in v1.8.0 — for now, pass position
+            coordinates only.
+
+            USAGE: Position on a type (interface or class), find all implementors/subclasses.
+            OUTPUT: List of implementing/extending types with locations.
 
             IMPORTANT: Uses ZERO-BASED coordinates.
 

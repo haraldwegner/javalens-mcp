@@ -91,14 +91,53 @@ class FindFieldWritesToolTest {
         assertFalse(tool.execute(noLine).isSuccess());
     }
 
-    @Test @DisplayName("handles non-field position gracefully")
-    void handlesNonFieldPosition() {
+    @Test @DisplayName("Sprint 14 (bugs.md #12): non-field position now returns success with nearbyFieldCandidates instead of a hard refusal")
+    void nonFieldPosition_returnsNearbyCandidates() {
         ObjectNode args = objectMapper.createObjectNode();
         args.put("filePath", refactoringTargetPath);
-        args.put("line", 20);  // Method, not field
+        args.put("line", 20);  // a method, not a field
         args.put("column", 16);
 
         ToolResponse r = tool.execute(args);
-        assertFalse(r.isSuccess());
+
+        assertTrue(r.isSuccess(),
+            "non-field position now succeeds with graceful-degradation candidate hints; got: " + r.getError());
+        Map<String, Object> data = getData(r);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> writes = (List<Map<String, Object>>) data.get("writeLocations");
+        assertTrue(writes.isEmpty(), "writeLocations must be empty when no field resolves");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>) data.get("nearbyFieldCandidates");
+        assertNotNull(candidates, "nearbyFieldCandidates must be present (even if empty)");
+        String note = (String) data.get("note");
+        assertNotNull(note, "explanatory note must be present");
+        assertTrue(note.contains("not a field") || note.contains("No symbol"),
+            "note must explain why we fell back to candidates; got: " + note);
+    }
+
+    @Test @DisplayName("Sprint 14 (bugs.md #12): position landing on a field still returns its write locations (no regression)")
+    void fieldPosition_stillReturnsWriteLocations() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", refactoringTargetPath);
+        args.put("line", 13);
+        args.put("column", 19);
+
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(), "got: " + r.getError());
+        Map<String, Object> data = getData(r);
+        assertEquals("userName", data.get("field"));
+    }
+
+    @Test @DisplayName("Sprint 14 (bugs.md #12): schema description discloses the position-based contract + v1.8.0 FQN overload hint")
+    void schemaDescription_disclosesPositionContract() {
+        String desc = tool.getDescription();
+        assertTrue(desc.contains("filePath, line, column"),
+            "description must spell out the (filePath, line, column) triple; got:\n" + desc);
+        assertTrue(desc.contains("ZERO-BASED"),
+            "description must keep the zero-based coordinate warning; got:\n" + desc);
+        assertTrue(desc.contains("v1.8.0"),
+            "description must flag the upcoming v1.8.0 FQN overload; got:\n" + desc);
+        assertTrue(desc.contains("nearbyFieldCandidates"),
+            "description must document the graceful-degradation hint; got:\n" + desc);
     }
 }

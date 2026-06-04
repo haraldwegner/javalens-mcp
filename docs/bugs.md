@@ -53,7 +53,7 @@ Add a second match branch in the visitor: when `renamingAType` is true AND the r
 
 ## #12 — `find_implementations` / `find_field_writes` require exact `(filePath,line,column)`; no FQN/type-scoped path, and the constraint is undocumented
 
-- **Status:** OPEN
+- **Status:** FIXED in v1.8.0 *(schema-honesty half: all 4 find_* tool descriptions — find_references / find_implementations / find_field_writes / find_method_references — now state the (filePath, line, column) contract explicitly and flag the upcoming v1.8.0 FQN overload. Graceful-degradation half: find_field_writes no longer hard-refuses on near-miss positions; non-field-at-position returns SUCCESS with empty writeLocations + nearbyFieldCandidates (up to 3 fields declared within ±1 line of the requested position, each with name + line + column) so the agent can re-call with corrected coordinates. The FQN-capability half is the Phase B.2 feature still to ship in this same release — Sprint 14 Stage 9.)*
 - **Date observed:** 2026-05-15 / 2026-05-13 (EXECSIM-Java sessions)
 - **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`, recorded in `~/CursorProjects/EXECSIM-Java/docs/mcp_feedback.md`
 - **Server version:** 1.7.x (2.0.0-SNAPSHOT health string)
