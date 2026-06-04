@@ -181,6 +181,44 @@ class RunTestsToolTest {
     }
 
     @Test
+    @DisplayName("Bug #1 end-to-end: triggering run_tests on plain Maven does not surface Bundle.getHeaders / OSGi NPE")
+    void runTests_plainMaven_doesNotNpeEndToEnd() {
+        // End-to-end NPE-avoidance smoke. The simple-maven fixture has test
+        // sources but no compiled .class files (the fixture-build pipeline is
+        // separate work — see the @Disabled happy-path tests below). So the
+        // actual launch is expected to FAIL — what we're verifying is the
+        // SHAPE of the failure:
+        //   - PRE-FIX behaviour (v1.7.1): the OSGi NPE on Bundle.getHeaders()
+        //     surfaced as INTERNAL_ERROR.
+        //   - WITH FIX (v1.8.0): the launch proceeds far enough to fail on
+        //     something else (test class not found, empty results, timeout, …)
+        //     but NEVER on Bundle.getHeaders().
+        // Short timeout caps the wait — the launch fails fast or times out
+        // bounded.
+        ObjectNode args = objectMapper.createObjectNode();
+        ObjectNode scope = args.putObject("scope");
+        scope.put("kind", "method");
+        scope.put("typeName", "com.example.SampleTest");
+        scope.put("methodName", "testAddition");
+        args.put("framework", "junit5");
+        args.put("timeoutSeconds", 8);
+
+        ToolResponse r = tool.execute(args);
+
+        String allText;
+        if (r.isSuccess()) {
+            allText = String.valueOf(r.getData());
+        } else {
+            allText = (r.getError().getCode() + " : " + r.getError().getMessage()
+                + " | " + r.getError().getHint());
+        }
+        assertFalse(allText.contains("Bundle.getHeaders"),
+            "Response must not mention Bundle.getHeaders (PRE-FIX OSGi NPE substring); got: " + allText);
+        assertFalse(allText.contains("\"bundle\" is null"),
+            "Response must not mention the canonical Bundle-was-null NPE phrase; got: " + allText);
+    }
+
+    @Test
     @Disabled("Pending fixture-build pipeline: JUnit launching from the "
         + "Tycho-surefire test runtime needs sample-project test classes "
         + "compiled on disk for the forked JVM's classpath. The Sprint 14 / "
