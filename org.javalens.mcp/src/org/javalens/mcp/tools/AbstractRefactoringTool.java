@@ -1,8 +1,16 @@
 package org.javalens.mcp.tools;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceChangeEvent;
+import org.eclipse.core.resources.IResourceChangeListener;
+import org.eclipse.core.resources.IResourceDelta;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.IJavaElement;
+import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.refactoring.descriptors.JavaRefactoringDescriptor;
 import org.eclipse.ltk.core.refactoring.Change;
 import org.eclipse.ltk.core.refactoring.PerformChangeOperation;
@@ -16,8 +24,10 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -244,17 +254,58 @@ public abstract class AbstractRefactoringTool extends AbstractTool {
             // 5. Perform the change. PerformChangeOperation handles undo
             //    history, validation, and cleanup. If the change throws,
             //    nothing partial is left behind by JDT's own contract.
+            //
+            //    Sprint 14 (bugs.md #10 sub-defect 2): some LTK refactorings
+            //    use ProcessorBasedRefactoring$ProcessorChange which expose
+            //    NO children via the Change tree, so walking the Change tree
+            //    after perform() doesn't surface modified files. Register a
+            //    workspace IResourceChangeListener around perform.run() to
+            //    capture every IFile actually mutated, regardless of Change
+            //    tree opacity.
+            Set<String> modifiedFilePaths = new LinkedHashSet<>();
+            IResourceChangeListener listener = event -> {
+                IResourceDelta delta = event.getDelta();
+                if (delta == null) return;
+                try {
+                    delta.accept(d -> {
+                        IResource r = d.getResource();
+                        if (r instanceof IFile f) {
+                            collectFilePath(f, modifiedFilePaths, service);
+                        }
+                        return true;
+                    });
+                } catch (CoreException ignore) {
+                    // Best-effort: a single delta-walk failure shouldn't fail the refactor.
+                }
+            };
+            ResourcesPlugin.getWorkspace().addResourceChangeListener(
+                listener, IResourceChangeEvent.POST_CHANGE);
             PerformChangeOperation perform = new PerformChangeOperation(change);
-            perform.run(new NullProgressMonitor());
+            try {
+                perform.run(new NullProgressMonitor());
+            } finally {
+                ResourcesPlugin.getWorkspace().removeResourceChangeListener(listener);
+            }
 
             RefactoringStatus validation = perform.getValidationStatus();
             if (validation != null && (validation.hasFatalError() || validation.hasError())) {
                 return refactoringFailed(operationLabel, validation);
             }
 
-            // 6. Collect modified compilation units (best-effort: walks the
-            //    Change tree, picking out CompilationUnitChange descendants).
-            List<Map<String, Object>> modifiedFiles = describeModifiedUnits(change, service);
+            // 6. Build modifiedFiles. Primary source: the resource-change
+            //    listener (catches refactorings whose Change tree is opaque,
+            //    like ProcessorChange). Secondary: walk the Change tree for
+            //    any ICompilationUnit / IFile entries it surfaces directly
+            //    (refactorings whose Change tree IS expressive, like Rename).
+            //    Deduped by formatted path.
+            List<Map<String, Object>> modifiedFiles = new ArrayList<>();
+            for (String path : modifiedFilePaths) {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("filePath", path);
+                entry.put("summary", change.getName());
+                modifiedFiles.add(entry);
+            }
+            mergeTreeWalkChanges(change, modifiedFiles, modifiedFilePaths, service);
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("operation", operationLabel);
@@ -316,44 +367,85 @@ public abstract class AbstractRefactoringTool extends AbstractTool {
     }
 
     /**
-     * Walk the {@link Change} tree (JDT-LTK CompositeChange / TextFileChange /
-     * etc.) collecting compilation units that were touched. Each entry has
-     * {@code filePath} (formatted relative to project root via
-     * {@link IJdtService#getPathUtils()}) and {@code summary} carrying the
-     * change's name.
+     * Secondary pass: walk the {@link Change} tree for any
+     * {@link ICompilationUnit} / {@link IFile} / {@link IJavaElement}
+     * entries the LTK refactoring exposed directly. For
+     * ProcessorChange-based refactorings (move_class etc.) this is a no-op;
+     * the IResourceChangeListener already covered them. For Rename-type
+     * refactorings whose Change tree IS expressive, this picks up
+     * IJavaElement metadata that raw resource events don't surface.
+     * Dedupes against {@code seenPaths} populated by the listener.
      */
-    private List<Map<String, Object>> describeModifiedUnits(Change change, IJdtService service) {
-        List<Map<String, Object>> out = new ArrayList<>();
-        collectCompilationUnitChanges(change, out, service);
-        return out;
-    }
-
-    private static void collectCompilationUnitChanges(Change change,
-                                                      List<Map<String, Object>> out,
-                                                      IJdtService service) {
+    private static void mergeTreeWalkChanges(Change change,
+                                              List<Map<String, Object>> out,
+                                              Set<String> seenPaths,
+                                              IJdtService service) {
         if (change == null) return;
         Object modified = change.getModifiedElement();
         if (modified instanceof ICompilationUnit cu) {
-            Map<String, Object> entry = new LinkedHashMap<>();
-            try {
-                java.nio.file.Path absolute = cu.getResource().getLocation().toFile().toPath();
-                entry.put("filePath", service.getPathUtils().formatPath(absolute));
-            } catch (Exception ignore) {
-                entry.put("filePath", String.valueOf(cu.getElementName()));
+            addCuEntry(cu, change, out, seenPaths, service);
+        } else if (modified instanceof IFile file) {
+            IJavaElement javaElement = JavaCore.create(file);
+            if (javaElement instanceof ICompilationUnit cu) {
+                addCuEntry(cu, change, out, seenPaths, service);
+            } else {
+                addFileEntry(file, change, out, seenPaths, service);
             }
-            entry.put("summary", change.getName());
-            out.add(entry);
         } else if (modified instanceof IJavaElement element) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("element", element.getElementName());
             entry.put("summary", change.getName());
             out.add(entry);
         }
-        // Composite changes have children: recurse.
         if (change instanceof org.eclipse.ltk.core.refactoring.CompositeChange composite) {
             for (Change child : composite.getChildren()) {
-                collectCompilationUnitChanges(child, out, service);
+                mergeTreeWalkChanges(child, out, seenPaths, service);
             }
         }
+    }
+
+    private static void collectFilePath(IFile file, Set<String> sink, IJdtService service) {
+        try {
+            java.nio.file.Path absolute = file.getLocation().toFile().toPath();
+            sink.add(service.getPathUtils().formatPath(absolute));
+        } catch (Exception ignore) {
+            sink.add(file.getName());
+        }
+    }
+
+    private static void addCuEntry(ICompilationUnit cu, Change change,
+                                    List<Map<String, Object>> out,
+                                    Set<String> seenPaths,
+                                    IJdtService service) {
+        String filePath;
+        try {
+            java.nio.file.Path absolute = cu.getResource().getLocation().toFile().toPath();
+            filePath = service.getPathUtils().formatPath(absolute);
+        } catch (Exception ignore) {
+            filePath = String.valueOf(cu.getElementName());
+        }
+        if (!seenPaths.add(filePath)) return;
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("filePath", filePath);
+        entry.put("summary", change.getName());
+        out.add(entry);
+    }
+
+    private static void addFileEntry(IFile file, Change change,
+                                      List<Map<String, Object>> out,
+                                      Set<String> seenPaths,
+                                      IJdtService service) {
+        String filePath;
+        try {
+            java.nio.file.Path absolute = file.getLocation().toFile().toPath();
+            filePath = service.getPathUtils().formatPath(absolute);
+        } catch (Exception ignore) {
+            filePath = file.getName();
+        }
+        if (!seenPaths.add(filePath)) return;
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("filePath", filePath);
+        entry.put("summary", change.getName());
+        out.add(entry);
     }
 }

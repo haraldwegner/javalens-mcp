@@ -121,7 +121,23 @@ Distinct error code `PROJECT_KEY_DROPPED` with the unload reason + timestamp; ke
 
 ## #10 — `move_class` cross-project deficiencies (no physical relocation, empty `modifiedFiles`, test-source consumers missed, no back-edge warning)
 
-- **Status:** OPEN
+- **Status:** FIXED in v1.8.0 *(sub-defects 1 + 2; sub-defect 3 deferred to v1.8.1)*
+
+### Sub-defect 1 — Cross-project relocation (FIXED v1.8.0)
+
+`MoveClassTool` now resolves the **source project** from `cu.getJavaProject()` (was `service.getJavaProject()` — wrong in multi-project workspaces) and resolves the **target project** in three steps: explicit `targetProjectKey` param wins; otherwise auto-detect by scanning loaded projects for one that already has `targetPackage`; otherwise stay in the source project. `ensurePackageInProject()` creates the target package in the target project's first source root if it doesn't already exist there.
+
+### Sub-defect 2 — `modifiedFiles` populated (FIXED v1.8.0)
+
+`AbstractRefactoringTool.runRefactoring()` now registers an `IResourceChangeListener` (POST_CHANGE) around `PerformChangeOperation.run()`. The listener captures every `IFile` mutated during the refactoring, regardless of whether the LTK Change tree surfaces them. **Investigation showed JDT's `ProcessorBasedRefactoring$ProcessorChange` reports `children=0`** — its perform() does the work directly without exposing sub-changes — which is exactly why the previous tree-walking approach produced an empty `modifiedFiles` array. The listener path catches them; the tree-walk is kept as a secondary path for refactorings that DO expose their tree (Rename etc.), deduped by formatted path.
+
+### Sub-defect 3 — Javadoc `@link` import filter (DEFERRED to v1.8.1)
+
+Filtering the `ImportRewrite` to skip imports whose only reference is a `@link` Javadoc node requires intercepting `MoveCuUpdateCreator`'s internal rewrite — JDT internal-API spelunking that exceeds Sprint 14's bug-batch budget. Tracked for v1.8.1.
+
+### Sub-defect 4 — Back-edge pre-flight warning (DEFERRED to v1.8.1+)
+
+Not yet addressed; the orchestration would naturally pair with the `copy_class` / `wrap_class` strangler-fig toolset on `docs/upgrade-checklist.md`.
 - **Date observed:** 2026-05-11 (EXECSIM-Java Sprint 1 Phase 1)
 - **Reporter:** Claude (Opus 4.7) via `jl-jats-orb-ws`
 - **Server version:** 1.7.x
