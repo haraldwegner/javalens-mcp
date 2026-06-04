@@ -11,6 +11,7 @@ import org.eclipse.jdt.core.search.SearchMatch;
 import org.javalens.core.IJdtService;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.tools.fqn.FqnResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,6 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -43,16 +45,17 @@ public class FindImplementationsTool extends AbstractTool {
         return """
             Find implementations of an interface or extensions of a class.
 
-            INPUT CONTRACT: position-based (Sprint 14 schema-honesty pass —
-            bugs.md #12). The (filePath, line, column) triple is REQUIRED and
-            must point at a type (interface or class). A type-scoped /
-            FQN-based overload is coming in v1.8.0 — for now, pass position
-            coordinates only.
+            INPUT CONTRACT: TWO alternative invocation forms (Sprint 14 /
+            bugs.md #12 — both halves shipped in v1.8.0):
 
-            USAGE: Position on a type (interface or class), find all implementors/subclasses.
+            (a) Position-based — pass (filePath, line, column) on a type
+                (interface or class). ZERO-BASED coordinates.
+
+            (b) FQN-based (v1.8.0) — pass `symbol` = "com.foo.Bar" (a type
+                FQN). Optional `scope` = "workspace" (default) or "project"
+                (requires projectKey).
+
             OUTPUT: List of implementing/extending types with locations.
-
-            IMPORTANT: Uses ZERO-BASED coordinates.
 
             Requires load_project to be called first.
             """;
@@ -80,38 +83,67 @@ public class FindImplementationsTool extends AbstractTool {
                 "description", "Max implementations to return (default 100)"
             )
         ));
-        schema.put("required", List.of("filePath", "line", "column"));
+        // Schema no longer marks (filePath, line, column) as required since
+        // the FQN form via `symbol` is also valid (Sprint 14 Phase B.2).
+        @SuppressWarnings("unchecked")
+        Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
+        Map<String, Object> mutable = new LinkedHashMap<>(properties);
+        mutable.put("symbol", Map.of(
+            "type", "string",
+            "description", "Sprint 14 FQN form (bugs.md #12 capability half): 'com.foo.Bar' — a type FQN."));
+        mutable.put("scope", Map.of(
+            "type", "string",
+            "enum", List.of("workspace", "project"),
+            "description", "FQN-form scope: 'workspace' (default) or 'project' (requires projectKey)."));
+        schema.put("properties", mutable);
         return withProjectKey(schema);
     }
 
     @Override
     protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
-        String filePath = getStringParam(arguments, "filePath");
-        if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required parameter missing");
-        }
-
-        int line = getIntParam(arguments, "line", -1);
-        int column = getIntParam(arguments, "column", -1);
         int maxResults = getIntParam(arguments, "maxResults", 100);
-
-        if (line < 0) {
-            return ToolResponse.invalidParameter("line", "Must be >= 0 (zero-based)");
-        }
-        if (column < 0) {
-            return ToolResponse.invalidParameter("column", "Must be >= 0 (zero-based)");
-        }
-
         maxResults = Math.min(Math.max(maxResults, 1), 1000);
 
         try {
-            Path path = Path.of(filePath);
-
-            // Get element at position
-            IJavaElement element = service.getElementAtPosition(path, line, column);
-
-            if (element == null) {
-                return ToolResponse.symbolNotFound("No symbol found at position");
+            // Sprint 14 Phase B.2 (bugs.md #12): FQN form wins if `symbol`
+            // is present. Existing position-based path otherwise.
+            String symbol = getStringParam(arguments, "symbol");
+            IJavaElement element;
+            if (symbol != null && !symbol.isBlank()) {
+                String scopeRaw = getStringParam(arguments, "scope", "workspace");
+                FqnResolver.Scope scope;
+                try {
+                    scope = FqnResolver.Scope.valueOf(scopeRaw.toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    return ToolResponse.invalidParameter("scope",
+                        "Must be 'workspace' or 'project'; got '" + scopeRaw + "'");
+                }
+                String projectKey = getStringParam(arguments, "projectKey");
+                Optional<IJavaElement> resolved = FqnResolver.resolve(symbol, service, scope, projectKey);
+                if (resolved.isEmpty()) {
+                    return ToolResponse.symbolNotFound(
+                        "FQN '" + symbol + "' not found in " + scopeRaw + " scope");
+                }
+                element = resolved.get();
+            } else {
+                String filePath = getStringParam(arguments, "filePath");
+                if (filePath == null || filePath.isBlank()) {
+                    return ToolResponse.invalidParameter("filePath",
+                        "Required parameter missing — pass either (filePath, line, column) or symbol");
+                }
+                int line = getIntParam(arguments, "line", -1);
+                int column = getIntParam(arguments, "column", -1);
+                if (line < 0) {
+                    return ToolResponse.invalidParameter("line", "Must be >= 0 (zero-based)");
+                }
+                if (column < 0) {
+                    return ToolResponse.invalidParameter("column", "Must be >= 0 (zero-based)");
+                }
+                Path path = Path.of(filePath);
+                element = service.getElementAtPosition(path, line, column);
+                if (element == null) {
+                    return ToolResponse.symbolNotFound("No symbol found at position");
+                }
             }
 
             // Must be a type or method

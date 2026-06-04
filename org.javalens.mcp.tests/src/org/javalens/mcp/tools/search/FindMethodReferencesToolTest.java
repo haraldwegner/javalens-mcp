@@ -92,4 +92,14 @@ class FindMethodReferencesToolTest {
         assertTrue(desc.contains("v1.8.0"),
             "description must flag the upcoming v1.8.0 FQN overload; got:\n" + desc);
     }
+
+    @Test
+    @DisplayName("Sprint 14 Phase B.2 (bugs.md #12 capability half): FQN form via 'symbol' param resolves a method and runs the search")
+    void fqnForm_methodFqn_runsMethodReferencesSearch() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("symbol", "com.example.HelloWorld#getGreeting");
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(),
+            "FQN method form must succeed for a known method; got: " + r.getError());
+    }
 }

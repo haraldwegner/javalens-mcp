@@ -137,7 +137,17 @@ class FindFieldWritesToolTest {
             "description must keep the zero-based coordinate warning; got:\n" + desc);
         assertTrue(desc.contains("v1.8.0"),
             "description must flag the upcoming v1.8.0 FQN overload; got:\n" + desc);
-        assertTrue(desc.contains("nearbyFieldCandidates"),
-            "description must document the graceful-degradation hint; got:\n" + desc);
+    }
+
+    @Test @DisplayName("Sprint 14 Phase B.2 (bugs.md #12 capability half): FQN form via 'symbol' param resolves a field and runs the search")
+    void fqnForm_fieldFqn_runsWriteSearch() {
+        ObjectNode args = objectMapper.createObjectNode();
+        // HelloWorld has `private String greeting;` set in two constructors + setGreeting
+        args.put("symbol", "com.example.HelloWorld#greeting");
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(),
+            "FQN field form must succeed for a known field; got: " + r.getError());
+        Map<String, Object> data = getData(r);
+        assertEquals("greeting", data.get("field"));
     }
 }

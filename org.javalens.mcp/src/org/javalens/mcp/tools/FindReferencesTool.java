@@ -12,6 +12,7 @@ import org.eclipse.jdt.core.search.SearchMatch;
 import org.javalens.core.IJdtService;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.tools.fqn.FqnResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,6 +21,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
@@ -44,16 +46,24 @@ public class FindReferencesTool extends AbstractTool {
         return """
             Find all references to a symbol across the project.
 
-            INPUT CONTRACT: position-based (Sprint 14 schema-honesty pass —
-            bugs.md #12). The (filePath, line, column) triple is REQUIRED and
-            must point at a declared symbol (type, method, field, etc.). A
-            type-scoped / FQN-based overload is coming in v1.8.0 — for now,
-            pass position coordinates only.
+            INPUT CONTRACT: TWO alternative invocation forms (Sprint 14 /
+            bugs.md #12 — both halves shipped in v1.8.0):
 
-            USAGE: Position on symbol, find all usages.
+            (a) Position-based — pass (filePath, line, column). The triple
+                is required and must point at a declared symbol (type,
+                method, field, etc.). ZERO-BASED coordinates.
+
+            (b) FQN-based (v1.8.0) — pass `symbol` instead of position. The
+                resolver handles three forms:
+                  - Type:                   "com.foo.Bar"
+                  - Method (any overload):  "com.foo.Bar#methodName"
+                  - Method (one overload):  "com.foo.Bar#methodName(int,java.lang.String)"
+                  - Field:                  "com.foo.Bar#fieldName"
+                Plus `scope`: "workspace" (default) searches every loaded
+                project; "project" requires `projectKey` and scopes the FQN
+                lookup to that one project.
+
             OUTPUT: List of reference locations with context.
-
-            IMPORTANT: Uses ZERO-BASED coordinates.
 
             Requires load_project to be called first.
             """;
@@ -63,56 +73,76 @@ public class FindReferencesTool extends AbstractTool {
     public Map<String, Object> getInputSchema() {
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
-        schema.put("properties", Map.of(
-            "filePath", Map.of(
-                "type", "string",
-                "description", "Path to source file"
-            ),
-            "line", Map.of(
-                "type", "integer",
-                "description", "Zero-based line number"
-            ),
-            "column", Map.of(
-                "type", "integer",
-                "description", "Zero-based column number"
-            ),
-            "maxResults", Map.of(
-                "type", "integer",
-                "description", "Max references to return (default 100)"
-            )
-        ));
-        schema.put("required", List.of("filePath", "line", "column"));
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("filePath", Map.of(
+            "type", "string",
+            "description", "Path to source file (position-based form)."));
+        properties.put("line", Map.of(
+            "type", "integer",
+            "description", "Zero-based line number (position-based form)."));
+        properties.put("column", Map.of(
+            "type", "integer",
+            "description", "Zero-based column number (position-based form)."));
+        properties.put("symbol", Map.of(
+            "type", "string",
+            "description", "Sprint 14 FQN form (bugs.md #12 capability half): 'com.foo.Bar' (type) or 'com.foo.Bar#method' or 'com.foo.Bar#method(int,java.lang.String)' or 'com.foo.Bar#field'."));
+        properties.put("scope", Map.of(
+            "type", "string",
+            "enum", List.of("workspace", "project"),
+            "description", "FQN-form scope: 'workspace' (default) or 'project' (requires projectKey)."));
+        properties.put("maxResults", Map.of(
+            "type", "integer",
+            "description", "Max references to return (default 100)."));
+        schema.put("properties", properties);
         return withProjectKey(schema);
     }
 
     @Override
     protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
-        String filePath = getStringParam(arguments, "filePath");
-        if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required parameter missing");
-        }
-
-        int line = getIntParam(arguments, "line", -1);
-        int column = getIntParam(arguments, "column", -1);
         int maxResults = getIntParam(arguments, "maxResults", 100);
-
-        if (line < 0) {
-            return ToolResponse.invalidParameter("line", "Must be >= 0 (zero-based)");
-        }
-        if (column < 0) {
-            return ToolResponse.invalidParameter("column", "Must be >= 0 (zero-based)");
-        }
-
         maxResults = Math.min(Math.max(maxResults, 1), 1000);
 
         try {
-            Path path = Path.of(filePath);
-
-            // Get element at position
-            IJavaElement element = service.getElementAtPosition(path, line, column);
-
-            if (element == null) {
-                return ToolResponse.symbolNotFound("No symbol found at position");
+            // Sprint 14 Phase B.2 (bugs.md #12 capability half): FQN form
+            // wins when `symbol` is provided. Otherwise fall back to the
+            // position-based form (kept verbatim — additive change).
+            String symbol = getStringParam(arguments, "symbol");
+            IJavaElement element;
+            if (symbol != null && !symbol.isBlank()) {
+                String scopeRaw = getStringParam(arguments, "scope", "workspace");
+                FqnResolver.Scope scope;
+                try {
+                    scope = FqnResolver.Scope.valueOf(scopeRaw.toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    return ToolResponse.invalidParameter("scope",
+                        "Must be 'workspace' or 'project'; got '" + scopeRaw + "'");
+                }
+                String projectKey = getStringParam(arguments, "projectKey");
+                Optional<IJavaElement> resolved = FqnResolver.resolve(symbol, service, scope, projectKey);
+                if (resolved.isEmpty()) {
+                    return ToolResponse.symbolNotFound(
+                        "FQN '" + symbol + "' not found in " + scopeRaw + " scope");
+                }
+                element = resolved.get();
+            } else {
+                String filePath = getStringParam(arguments, "filePath");
+                if (filePath == null || filePath.isBlank()) {
+                    return ToolResponse.invalidParameter("filePath",
+                        "Required parameter missing — pass either (filePath, line, column) or symbol");
+                }
+                int line = getIntParam(arguments, "line", -1);
+                int column = getIntParam(arguments, "column", -1);
+                if (line < 0) {
+                    return ToolResponse.invalidParameter("line", "Must be >= 0 (zero-based)");
+                }
+                if (column < 0) {
+                    return ToolResponse.invalidParameter("column", "Must be >= 0 (zero-based)");
+                }
+                Path path = Path.of(filePath);
+                element = service.getElementAtPosition(path, line, column);
+                if (element == null) {
+                    return ToolResponse.symbolNotFound("No symbol found at position");
+                }
             }
 
             // Use SearchService for indexed reference search

@@ -175,4 +175,16 @@ class FindImplementationsToolTest {
         assertTrue(desc.contains("v1.8.0"),
             "description must flag the upcoming v1.8.0 FQN overload; got:\n" + desc);
     }
+
+    @Test
+    @DisplayName("Sprint 14 Phase B.2 (bugs.md #12 capability half): FQN form via 'symbol' param resolves and runs the implementations search")
+    void fqnForm_typeFqn_runsImplementationsSearch() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("symbol", "com.example.Animal");
+        ToolResponse response = tool.execute(args);
+
+        assertTrue(response.isSuccess(),
+            "FQN form must succeed for a known type; got: " + response.getError());
+        assertNotNull(response.getData());
+    }
 }

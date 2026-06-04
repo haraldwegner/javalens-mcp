@@ -15,6 +15,7 @@ import org.eclipse.jdt.core.search.SearchMatch;
 import org.javalens.core.IJdtService;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.tools.fqn.FqnResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
@@ -50,11 +52,15 @@ public class FindFieldWritesTool extends AbstractTool {
         return """
             Find all write accesses (mutations) to a field.
 
-            INPUT CONTRACT: position-based (Sprint 14 schema-honesty pass —
-            bugs.md #12). The (filePath, line, column) triple is REQUIRED and
-            must point at a field declaration or reference. A type-scoped /
-            FQN-based overload is coming in v1.8.0 — for now, pass position
-            coordinates only.
+            INPUT CONTRACT: TWO alternative invocation forms (Sprint 14 /
+            bugs.md #12 — both halves shipped in v1.8.0):
+
+            (a) Position-based — pass (filePath, line, column) on a field
+                declaration or reference. ZERO-BASED coordinates.
+
+            (b) FQN-based (v1.8.0) — pass `symbol` = "com.foo.Bar#fieldName".
+                Optional `scope` = "workspace" (default) or "project"
+                (requires projectKey).
 
             USAGE: Position cursor on a field declaration or reference.
             OUTPUT: List of locations where the field is modified.
@@ -81,63 +87,86 @@ public class FindFieldWritesTool extends AbstractTool {
     public Map<String, Object> getInputSchema() {
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
-        schema.put("properties", Map.of(
-            "filePath", Map.of(
-                "type", "string",
-                "description", "Path to source file"
-            ),
-            "line", Map.of(
-                "type", "integer",
-                "description", "Zero-based line number"
-            ),
-            "column", Map.of(
-                "type", "integer",
-                "description", "Zero-based column number"
-            ),
-            "maxResults", Map.of(
-                "type", "integer",
-                "description", "Max write locations to return (default 100)"
-            )
-        ));
-        schema.put("required", List.of("filePath", "line", "column"));
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("filePath", Map.of(
+            "type", "string",
+            "description", "Path to source file (position-based form)."));
+        properties.put("line", Map.of(
+            "type", "integer",
+            "description", "Zero-based line number (position-based form)."));
+        properties.put("column", Map.of(
+            "type", "integer",
+            "description", "Zero-based column number (position-based form)."));
+        properties.put("symbol", Map.of(
+            "type", "string",
+            "description", "Sprint 14 FQN form (bugs.md #12 capability half): 'com.foo.Bar#fieldName'."));
+        properties.put("scope", Map.of(
+            "type", "string",
+            "enum", List.of("workspace", "project"),
+            "description", "FQN-form scope: 'workspace' (default) or 'project' (requires projectKey)."));
+        properties.put("maxResults", Map.of(
+            "type", "integer",
+            "description", "Max write locations to return (default 100)."));
+        schema.put("properties", properties);
         return withProjectKey(schema);
     }
 
     @Override
     protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
-        String filePath = getStringParam(arguments, "filePath");
-        if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required parameter missing");
-        }
-
-        int line = getIntParam(arguments, "line", -1);
-        int column = getIntParam(arguments, "column", -1);
         int maxResults = getIntParam(arguments, "maxResults", 100);
-
-        if (line < 0) {
-            return ToolResponse.invalidParameter("line", "Must be >= 0 (zero-based)");
-        }
-        if (column < 0) {
-            return ToolResponse.invalidParameter("column", "Must be >= 0 (zero-based)");
-        }
-
         maxResults = Math.min(Math.max(maxResults, 1), 1000);
 
         try {
-            Path path = Path.of(filePath);
-
-            // Get element at position
-            IJavaElement element = service.getElementAtPosition(path, line, column);
-
-            // Sprint 14 (bugs.md #12): graceful degradation for no-symbol
-            // OR wrong-kind-of-symbol. Return success with empty
-            // writeLocations and a nearbyFieldCandidates list so the agent
-            // can re-call with corrected coordinates instead of bouncing
-            // off a hard refusal.
-            if (element == null || !(element instanceof IField)) {
-                return buildNearbyCandidatesResponse(service, path, line, element);
+            // Sprint 14 Phase B.2 (bugs.md #12 capability half): FQN form
+            // wins when `symbol` is provided. The graceful-degradation
+            // nearbyFieldCandidates path stays bound to the position-based
+            // path — the FQN path uses a strict "not found" / "not a field"
+            // dispatch since the caller knew exactly what they were asking
+            // for.
+            String symbol = getStringParam(arguments, "symbol");
+            IField field;
+            if (symbol != null && !symbol.isBlank()) {
+                String scopeRaw = getStringParam(arguments, "scope", "workspace");
+                FqnResolver.Scope scope;
+                try {
+                    scope = FqnResolver.Scope.valueOf(scopeRaw.toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    return ToolResponse.invalidParameter("scope",
+                        "Must be 'workspace' or 'project'; got '" + scopeRaw + "'");
+                }
+                String projectKey = getStringParam(arguments, "projectKey");
+                Optional<IJavaElement> resolved = FqnResolver.resolve(symbol, service, scope, projectKey);
+                if (resolved.isEmpty()) {
+                    return ToolResponse.symbolNotFound(
+                        "FQN '" + symbol + "' not found in " + scopeRaw + " scope");
+                }
+                IJavaElement el = resolved.get();
+                if (!(el instanceof IField f)) {
+                    return ToolResponse.invalidParameter("symbol",
+                        "FQN '" + symbol + "' resolves to " + getElementKind(el) + ", not a field");
+                }
+                field = f;
+            } else {
+                String filePath = getStringParam(arguments, "filePath");
+                if (filePath == null || filePath.isBlank()) {
+                    return ToolResponse.invalidParameter("filePath",
+                        "Required parameter missing — pass either (filePath, line, column) or symbol");
+                }
+                int line = getIntParam(arguments, "line", -1);
+                int column = getIntParam(arguments, "column", -1);
+                if (line < 0) {
+                    return ToolResponse.invalidParameter("line", "Must be >= 0 (zero-based)");
+                }
+                if (column < 0) {
+                    return ToolResponse.invalidParameter("column", "Must be >= 0 (zero-based)");
+                }
+                Path path = Path.of(filePath);
+                IJavaElement element = service.getElementAtPosition(path, line, column);
+                if (element == null || !(element instanceof IField)) {
+                    return buildNearbyCandidatesResponse(service, path, line, element);
+                }
+                field = (IField) element;
             }
-            IField field = (IField) element;
 
             // Use SearchService for indexed write access search
             List<SearchMatch> matches = service.getSearchService()

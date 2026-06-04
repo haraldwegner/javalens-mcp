@@ -177,4 +177,30 @@ class FindReferencesToolTest {
         Map<String, Object> data = getData(response);
         assertNotNull(getReferences(data));
     }
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #12 schema-honesty): description discloses position-based contract + FQN overload")
+    void schemaDescription_disclosesPositionContract() {
+        String desc = tool.getDescription();
+        assertTrue(desc.contains("filePath, line, column"),
+            "description must spell out the (filePath, line, column) triple; got:\n" + desc);
+        assertTrue(desc.contains("ZERO-BASED"),
+            "description must keep the zero-based coordinate warning; got:\n" + desc);
+        assertTrue(desc.contains("v1.8.0"),
+            "description must reference the v1.8.0 FQN overload; got:\n" + desc);
+    }
+
+    @Test
+    @DisplayName("Sprint 14 Phase B.2 (bugs.md #12 capability half): FQN form via 'symbol' param resolves and runs the search")
+    void fqnForm_typeFqn_returnsReferences() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("symbol", "com.example.HelloWorld");
+        ToolResponse response = tool.execute(args);
+
+        assertTrue(response.isSuccess(),
+            "FQN form must succeed for a known type; got: " + response.getError());
+        Map<String, Object> data = getData(response);
+        assertEquals("HelloWorld", data.get("symbol"));
+        assertNotNull(getReferences(data));
+    }
 }
