@@ -48,6 +48,7 @@ import org.javalens.mcp.tools.PushDownTool;
 import org.javalens.mcp.tools.EncapsulateFieldTool;
 import org.javalens.mcp.tools.CompileWorkspaceTool;
 import org.javalens.mcp.tools.RefreshWorkspaceTool;
+import org.javalens.mcp.tools.FindDuplicateCodeTool;
 import org.javalens.mcp.tools.RunTestsTool;
 import org.javalens.mcp.tools.build.AddDependencyTool;
 import org.javalens.mcp.tools.build.FindUnusedDependenciesTool;
@@ -403,6 +404,9 @@ public class JavaLensApplication implements IApplication {
 
         // Sprint 14 Phase B.1 (v1.8.0): consolidated lifecycle tool.
         toolRegistry.register(new RefreshWorkspaceTool(() -> jdtService));
+
+        // Sprint 14 Phase B.3 (v1.8.0): structural clone detector.
+        toolRegistry.register(new FindDuplicateCodeTool(() -> jdtService));
 
         // Sprint 13 (v1.7.0): Ring 2 code generation tools.
         toolRegistry.register(new GenerateConstructorTool(() -> jdtService));
