@@ -1,27 +1,31 @@
-# JavaLens (hw1964 fork) — IDE-grade code analysis for Java agents
+# JavaLens — IDE-grade Java code intelligence for AI agents
 
 [![GitHub release](https://img.shields.io/github/v/release/hw1964/javalens-mcp)](https://github.com/hw1964/javalens-mcp/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
 
-An MCP server that gives AI coding agents the same compiler-accurate understanding of a Java codebase that a human developer gets in Eclipse or IntelliJ — call hierarchies, type hierarchies, references, refactorings, build classpath, JDK semantics — built directly on Eclipse JDT.
+**73 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, LTK-backed structural refactorings, code generation, dependency management, and workspace-wide verification — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
 
-> **Java agents on steroids.** Pair with **[javalens-manager](https://github.com/hw1964/javalens-manager)** for a desktop control plane that turns one workspace's worth of Java projects into one MCP service.
+Battle-tested daily on multi-project codebases via the companion **[javalens-manager](https://github.com/hw1964/javalens-manager)** desktop control plane. Improvement loop is live: features, fixes, and ergonomics ship in response to refactoring sessions in production. See the [roadmap](docs/sprints/) for what's coming and the [release notes](docs/release-notes/) for what just shipped.
+
+```bash
+# Linux — installs the manager (which pulls JavaLens automatically)
+curl -sSL https://raw.githubusercontent.com/hw1964/javalens-manager/main/install.sh | bash
+```
 
 ---
 
-## Fork relationship
+## Companion: javalens-manager
 
-This is a **substantially extended fork** of [pzalutski-pixel/javalens-mcp](https://github.com/pzalutski-pixel/javalens-mcp). The original v1.0–v1.2 work — Eclipse-JDT integration layer, the initial tool surface, the OSGi/Equinox plumbing — is by Piotr Zalutski. From v1.3 onward (Sprint 9–13, ~tens of thousands of LOC) the fork has diverged substantially:
+The manager is the recommended driver. It's a Tauri desktop app that:
 
-- **v1.3.0** — multi-project `WorkspaceManager`; one javalens process serves many sibling projects with workspace-scoped cross-project search.
-- **v1.4.0** — `WorkspaceFileWatcher`: live `workspace.json` reconciliation so adding/removing a project doesn't require a process restart.
-- **v1.5.0** — Sprint 11 (Phases A–D): Tycho-aware Maven detection, workspace bundle pool for `Require-Bundle`, Gradle Tooling API integration, parametric tool consolidation (66 → 55 tools), Phase E LTK-refactoring foundation.
-- **v1.5.1** — Sprint 11 Phase E: five JDT-LTK structural-refactoring tools — `move_class`, `move_package`, `pull_up`, `push_down`, `encapsulate_field`. Tool count 55 → 60.
-- **v1.6.0** — Sprint 12: two Ring 1 workspace-verification tools — `compile_workspace` (incremental build + aggregated `IMarker` diagnostics) and `run_tests` (JUnit / TestNG via JDT-LTK's launching delegate, headless). Tool count 60 → 62.
-- **v1.7.0** — Sprint 13 (this release): 11 new MCP tools across three rings. **Ring 2 (code generation, 6):** `generate_constructor`, `generate_getters_setters`, `generate_equals_hashcode`, `generate_tostring`, `override_methods`, `generate_test_skeleton`. **Ring 3 (build / dependency management, 3 — Maven-only):** `add_dependency`, `update_dependency`, `find_unused_dependencies`. **Ring 4 (formatter / workflow polish, 2):** `format` (file/package/project/workspace scope), `optimize_imports_workspace`. Tool count 62 → 73.
+- Manages named workspaces of Java projects with a workspace-first UI.
+- Writes `workspace.json` for the file-watcher and live-reconciles add/remove.
+- Deploys MCP server entries into Cursor / Claude Desktop / Antigravity / IntelliJ-style configs.
+- Polls for fork releases and downloads the latest jar automatically.
+- Native system-tray + autostart-on-boot, with session restoration so workspaces resume where you left off.
 
-See [`docs/release-notes/`](docs/release-notes/) for per-release detail.
+Linux x86_64 / aarch64 + macOS Apple Silicon. Direct MCP-client config without the manager is in the [Installation](#installation) section below.
 
 ---
 
@@ -383,6 +387,34 @@ When you change the Eclipse release the fork builds against (currently 2024-09),
 
 ---
 
+## Roadmap
+
+Active and future sprint backlogs live under [`docs/sprints/`](docs/sprints/). Highlights:
+
+- **v1.8.0 (Sprint 14, in flight)** — lifecycle-hygiene bug bundle + `refresh_workspace` consolidated tool + FQN-based `find_*` overloads + `find_duplicate_code` (clone detection) + Gradle path for the Ring 3 dep tools.
+- **Sprint 15+** — scaffolds for Fowler smell detection (~18 tools, the biggest single gap), modernisation sweeps (`var`/records/sealed/pattern-switch), multi-step refactoring orchestration (preview → apply gate + rollback), Kerievsky pattern transformations, SOLID violation detection, Android read-only tooling, HTTP/SSE transport, upstream-parity audit.
+
+The improvement direction is set by live refactoring sessions on real-world Java workspaces, not roadmap-deck speculation. If a tool surfaces friction repeatedly, it gets a sprint.
+
+---
+
+## Heritage
+
+This project started in 2025 as a fork of [pzalutski-pixel/javalens-mcp](https://github.com/pzalutski-pixel/javalens-mcp). The original v1.0–v1.2 work — Eclipse-JDT integration layer, the initial tool surface, the OSGi/Equinox plumbing — is by Piotr Zalutski and remains the load-bearing foundation.
+
+From v1.3.0 onward the fork has diverged substantially across nine numbered sprints. Per-workspace tool count progression: **upstream v1.2 baseline → 66 → 55 (Sprint 11 parametric consolidation) → 60 → 62 → 73 (Sprint 13) → 76 (Sprint 14, v1.8.0)**. Major themes added by the fork:
+
+- **Multi-project workspaces** (v1.3.0, Sprint 9) — one javalens process serves many sibling projects with workspace-scoped cross-project search.
+- **Live workspace.json reconciliation** (v1.4.0, Sprint 10) — `WorkspaceFileWatcher`.
+- **Detection-matrix completion + LTK structural refactorings** (v1.5.x, Sprint 11) — Tycho-aware Maven, workspace bundle pool for PDE, Gradle Tooling API, plus five LTK structural refactorings (`move_class`, `move_package`, `pull_up`, `push_down`, `encapsulate_field`).
+- **Workspace verification** (v1.6.0, Sprint 12) — `compile_workspace` + `run_tests`.
+- **Code generation + dependency management + workflow polish** (v1.7.0, Sprint 13) — 11 new tools across three rings (Ring 2 codegen, Ring 3 Maven dep mgmt, Ring 4 polish).
+- **Companion manager + lifecycle hygiene** (Sprint 14, v1.8.0 in flight) — see Roadmap.
+
+See [`docs/release-notes/`](docs/release-notes/) for per-release detail.
+
+---
+
 ## License
 
-MIT — see [LICENSE](LICENSE). Original work © Piotr Zalutski; fork additions (Sprint 9–13, v1.3.0+) © Harald Wegner. Both retained per MIT terms.
+MIT — see [LICENSE](LICENSE). Original work © Piotr Zalutski; fork additions © Harald Wegner. Both retained per MIT terms.
