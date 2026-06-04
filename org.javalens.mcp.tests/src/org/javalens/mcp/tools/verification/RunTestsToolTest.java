@@ -2,6 +2,9 @@ package org.javalens.mcp.tools.verification;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.launching.IRuntimeClasspathEntry;
+import org.eclipse.jdt.launching.JavaRuntime;
 import org.javalens.core.JdtServiceImpl;
 import org.javalens.mcp.fixtures.TestProjectHelper;
 import org.javalens.mcp.models.ErrorInfo;
@@ -22,15 +25,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Sprint 12 (v1.6.0) — {@code run_tests} validation + (deferred) happy-path
  * coverage.
  *
- * <p>The three happy-path tests are {@code @Disabled} for v1.6.0 because
- * Tycho-surefire's headless test runtime doesn't compile our sample-project
- * fixtures (the forked test JVM needs the fixture's compiled classes on
- * disk, and Tycho's test stage doesn't run javac on
- * {@code test-resources/sample-projects/.../src/test/java}). Production
- * usage works (manager → real workspace → real test classpath); validation
- * tests below cover the input layer. Full happy-path coverage lands in
- * v1.6.1 with a fixture-build pipeline. See
- * {@code docs/upgrade-checklist.md}.</p>
+ * <p>The three happy-path tests are {@code @Disabled} because Tycho-surefire's
+ * headless test runtime doesn't compile our sample-project fixtures (the
+ * forked test JVM needs the fixture's compiled classes on disk, and Tycho's
+ * test stage doesn't run javac on
+ * {@code test-resources/sample-projects/.../src/test/java}). Production usage
+ * works (manager → real workspace → real test classpath); validation tests
+ * below cover the input layer. Full happy-path coverage waits on a
+ * fixture-build pipeline. See {@code docs/upgrade-checklist.md}.</p>
+ *
+ * <p>Sprint 14 (v1.8.0) — bugs.md #1 full fix: the v1.7.1 short-circuit that
+ * pre-empted plain Maven / Gradle projects with an {@code INVALID_PARAMETER}
+ * + {@code mvn test} workaround is gone. Plain Maven / Gradle now flow
+ * through the same launch path as PDE, with an explicit pre-computed
+ * classpath that avoids the JDT JUnit launcher's
+ * {@code Bundle.getHeaders()} NPE. The
+ * {@link #mavenProject_runtimeClasspathMementos_resolveWithoutNpe()} test
+ * pins the indirect smoke (the classpath-computation step is exactly what
+ * the fix delegates to); end-to-end JVM-spawning verification still waits
+ * on the fixture-build pipeline.</p>
  */
 class RunTestsToolTest {
 
@@ -137,81 +150,45 @@ class RunTestsToolTest {
             "methodName description must mention typeName as the pairing field; got: " + methodNameDesc);
     }
 
-    // ========== Bug #1 dispatch tests (v1.7.1) ==========
-    // Plain Maven / Gradle projects no longer hit the JDT-LTK OSGi launcher
-    // (which NPEd on Bundle.getHeaders). Instead they short-circuit to
-    // INVALID_PARAMETER with an actionable workaround.
+    // ========== Bug #1 full-fix smoke (Sprint 14 / v1.8.0) ==========
+    // The v1.7.1 workaround dispatch is gone. Plain Maven / Gradle projects
+    // now flow through the same JDT JUnit launcher path as PDE, with an
+    // explicit pre-computed runtime classpath that avoids the
+    // Bundle.getHeaders() NPE. The smoke below verifies the classpath
+    // computation step (the load-bearing change) succeeds for a plain Maven
+    // project; end-to-end JVM-spawning happy-path coverage still waits on the
+    // fixture-build pipeline (see @Disabled tests below).
 
     @Test
-    @DisplayName("Bug #1: plain Maven project returns INVALID_PARAMETER with mvn-test workaround, not the OSGi NPE")
-    void runTests_plainMaven_returnsInvalidParameterNotNpe() {
-        ObjectNode args = objectMapper.createObjectNode();
-        ObjectNode scope = args.putObject("scope");
-        scope.put("kind", "method");
-        scope.put("typeName", "com.example.SampleTest");
-        scope.put("methodName", "testAddition");
-        args.put("framework", "junit5");
-        ToolResponse r = tool.execute(args);
-
-        assertFalse(r.isSuccess(),
-            "plain Maven (BuildSystem.MAVEN) should not invoke the launcher path");
-        assertEquals(ErrorInfo.INVALID_PARAMETER, r.getError().getCode(),
-            "expected INVALID_PARAMETER; got: " + r.getError());
-        String msg = r.getError().getMessage();
-        assertTrue(msg.contains("mvn test"),
-            "error message should suggest `mvn test` as the workaround; got: " + msg);
-        assertTrue(msg.contains("v1.8.0"),
-            "error message should point at the v1.8.0 roadmap; got: " + msg);
+    @DisplayName("Bug #1: JavaRuntime.computeUnresolvedRuntimeClasspath succeeds on plain Maven without NPE")
+    void mavenProject_runtimeClasspathMementos_resolveWithoutNpe() throws Exception {
+        // simple-maven is loaded in @BeforeEach. The fix in JUnitLaunchHelper
+        // calls JavaRuntime.computeUnresolvedRuntimeClasspath on this exact
+        // shape of project to populate ATTR_CLASSPATH on the launch config,
+        // sidestepping the JDT launcher's PluginClasspathProvider path that
+        // NPEs on a missing OSGi Bundle. If this returns non-empty without
+        // throwing, the load-bearing side of the fix works for Maven.
+        IJavaProject jp = helper.getService().allProjects().iterator().next().javaProject();
+        IRuntimeClasspathEntry[] entries = JavaRuntime.computeUnresolvedRuntimeClasspath(jp);
+        assertNotNull(entries, "computeUnresolvedRuntimeClasspath must not return null");
+        assertTrue(entries.length > 0,
+            "computeUnresolvedRuntimeClasspath must return at least one entry for a Maven project; got 0");
+        for (IRuntimeClasspathEntry entry : entries) {
+            String memento = entry.getMemento();
+            assertNotNull(memento, "Each entry must produce a non-null memento (used by ATTR_CLASSPATH)");
+            assertFalse(memento.isBlank(), "Each entry's memento must be non-blank; got: '" + memento + "'");
+        }
     }
 
     @Test
-    @DisplayName("Bug #1: plain Maven error message does NOT bubble Bundle.getHeaders NPE (catches regressions)")
-    void runTests_plainMaven_doesNotBubbleBundleHeadersNpe() {
-        ObjectNode args = objectMapper.createObjectNode();
-        ObjectNode scope = args.putObject("scope");
-        scope.put("kind", "method");
-        scope.put("typeName", "com.example.SampleTest");
-        scope.put("methodName", "testAddition");
-        args.put("framework", "junit5");
-        ToolResponse r = tool.execute(args);
-
-        assertFalse(r.isSuccess());
-        String msg = r.getError().getMessage();
-        assertFalse(msg.contains("Bundle.getHeaders"),
-            "error message must not surface the OSGi NPE substring; got: " + msg);
-        assertFalse(msg.contains("INTERNAL_ERROR"),
-            "error code/message must not reference INTERNAL_ERROR; got: " + r.getError());
-    }
-
-    @Test
-    @DisplayName("Bug #1: plain Maven short-circuit happens before scope validation (does not require valid scope to fire)")
-    void runTests_plainMaven_shortCircuitsEarly_packageScopeStillReturnsBuildSystemError() {
-        // Use a valid package scope so we know any failure is from the buildSystem
-        // branch, not from a malformed input.
-        ObjectNode args = objectMapper.createObjectNode();
-        ObjectNode scope = args.putObject("scope");
-        scope.put("kind", "package");
-        scope.put("packageName", "com.example");
-        args.put("framework", "junit5");
-        ToolResponse r = tool.execute(args);
-
-        assertFalse(r.isSuccess());
-        String msg = r.getError().getMessage();
-        assertTrue(msg.contains("mvn test"),
-            "the buildSystem dispatch should fire for package scope too; got: " + msg);
-    }
-
-    // The end-to-end scope-validation contract for {filePath, methodName} on a
-    // non-Maven project is covered by Layer 3 MCP smoke; the schema docs above
-    // already pin the documentation side, and Bug #1's dispatch fires before
-    // scope validation for the simple-maven fixture we load here.
-
-    @Test
-    @Disabled("v1.6.0 known limitation: JUnit launching from the Tycho-surefire "
-        + "test runtime needs a fixture-build pipeline (the sample-project's "
-        + "test classes must be compiled on disk for the forked JVM's classpath). "
-        + "Production usage via the manager works; happy-path coverage lands in "
-        + "v1.6.1. See docs/upgrade-checklist.md.")
+    @Disabled("Pending fixture-build pipeline: JUnit launching from the "
+        + "Tycho-surefire test runtime needs sample-project test classes "
+        + "compiled on disk for the forked JVM's classpath. The Sprint 14 / "
+        + "v1.8.0 bug #1 fix removed the OSGi NPE block (see "
+        + "mavenProject_runtimeClasspathMementos_resolveWithoutNpe above); "
+        + "end-to-end coverage waits on the fixture-build pipeline. "
+        + "Production usage via the manager works. See "
+        + "docs/upgrade-checklist.md.")
     @DisplayName("happy: methodScope on testAddition returns one passed result")
     void happy_methodScope_returnsPassed() {
         ObjectNode args = objectMapper.createObjectNode();
@@ -225,7 +202,8 @@ class RunTestsToolTest {
     }
 
     @Test
-    @Disabled("v1.6.0 known limitation — see docs/upgrade-checklist.md.")
+    @Disabled("Pending fixture-build pipeline — see "
+        + "happy_methodScope_returnsPassed and docs/upgrade-checklist.md.")
     @DisplayName("happy: classScope on SampleTest returns mixed pass/fail results")
     void happy_classScope_returnsMixedResults() {
         ObjectNode args = objectMapper.createObjectNode();
@@ -238,7 +216,8 @@ class RunTestsToolTest {
     }
 
     @Test
-    @Disabled("v1.6.0 known limitation — see docs/upgrade-checklist.md.")
+    @Disabled("Pending fixture-build pipeline — see "
+        + "happy_methodScope_returnsPassed and docs/upgrade-checklist.md.")
     @DisplayName("happy: packageScope on com.example collects all tests")
     void happy_packageScope_collectsAllTests() {
         ObjectNode args = objectMapper.createObjectNode();

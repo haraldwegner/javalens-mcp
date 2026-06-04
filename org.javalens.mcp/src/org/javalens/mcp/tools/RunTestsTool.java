@@ -8,7 +8,6 @@ import org.eclipse.jdt.core.IMethod;
 import org.eclipse.jdt.core.IType;
 import org.javalens.core.IJdtService;
 import org.javalens.core.LoadedProject;
-import org.javalens.core.project.ProjectImporter.BuildSystem;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
 import org.javalens.mcp.tools.junit.JUnitLaunchHelper;
@@ -33,12 +32,26 @@ import java.util.function.Supplier;
  * classpath (junit-jupiter-api → junit5; org.junit / junit-4.x →
  * junit4; testng → routed via JUnit 4 compat layer).</p>
  *
- * <p>The happy-path tests for this tool are {@code @Disabled} in v1.6.0
- * because Tycho-surefire's headless test runtime doesn't compile our
- * sample-project fixtures (the forked test JVM needs the fixture's
- * classes on disk). Production usage via the manager → real workspace
- * works. Full happy-path coverage lands in v1.6.1 with the fixture-build
- * pipeline. See {@code docs/upgrade-checklist.md}.</p>
+ * <p>Sprint 14 (v1.8.0) — bugs.md #1 full fix: plain Maven / Gradle / generic
+ * Java projects (no PDE nature) used to NPE on {@code Bundle.getHeaders()}
+ * inside the JDT JUnit launcher; the v1.7.1 workaround short-circuited them
+ * with an {@code INVALID_PARAMETER} pointing at {@code mvn test}. The fix
+ * lives in {@link JUnitLaunchHelper}: when the project lacks
+ * {@code org.eclipse.pde.PluginNature}, the helper pre-computes the resolved
+ * runtime classpath via {@code JavaRuntime} and pins it on the launch
+ * configuration — JDT's launcher then uses our classpath directly and never
+ * touches the (non-existent) Bundle for the project. The dispatch is gone
+ * from this tool; Maven / Gradle / PDE all flow through the same launch
+ * path.</p>
+ *
+ * <p>The three happy-path tests in {@link
+ * org.javalens.mcp.tools.verification.RunTestsToolTest} are still
+ * {@code @Disabled} because Tycho-surefire's headless test runtime doesn't
+ * compile our sample-project fixtures (the forked test JVM needs the
+ * fixture's classes on disk, and Tycho's test stage doesn't run javac on
+ * {@code test-resources/sample-projects/.../src/test/java}). Production usage
+ * via the manager → real workspace works. Full happy-path coverage lands
+ * once the fixture-build pipeline is in. See {@code docs/upgrade-checklist.md}.</p>
  */
 public class RunTestsTool extends AbstractTool {
 
@@ -161,24 +174,6 @@ public class RunTestsTool extends AbstractTool {
             }
         }
         IJavaProject javaProject = loaded.javaProject();
-
-        // v1.7.1 (bug #1): JDT-LTK's JUnit launcher assumes the target project
-        // is an OSGi bundle and dereferences a null Bundle.getHeaders() for plain
-        // Maven/Gradle projects, surfacing as INTERNAL_ERROR / NPE. Short-circuit
-        // with an actionable INVALID_PARAMETER + workaround pointer instead. The
-        // full plain-Maven/Gradle launch path is tracked for v1.8.0.
-        BuildSystem buildSystem = loaded.buildSystem();
-        if (buildSystem == BuildSystem.MAVEN || buildSystem == BuildSystem.GRADLE) {
-            String cmd = buildSystem == BuildSystem.MAVEN
-                ? "mvn test -Dtest='<TestClass>#<method>'"
-                : "gradle test --tests '<TestClass.method>'";
-            return ToolResponse.invalidParameter("projectKey",
-                "Project '" + loaded.projectKey() + "' is " + buildSystem.name().toLowerCase()
-                  + " (no Eclipse PDE nature). The current JDT JUnit launcher requires a "
-                  + "Bundle and produces an OSGi NPE on plain Maven/Gradle projects. "
-                  + "Workaround: run `" + cmd + "` via the Bash tool. "
-                  + "Full plain Maven/Gradle launch path tracked for v1.8.0.");
-        }
 
         try {
             JUnitLaunchHelper.LaunchRequest req = new JUnitLaunchHelper.LaunchRequest();

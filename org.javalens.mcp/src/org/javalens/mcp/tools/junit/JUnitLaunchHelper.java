@@ -13,6 +13,8 @@ import org.eclipse.debug.core.model.IStreamMonitor;
 import org.eclipse.debug.core.model.IStreamsProxy;
 import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.junit.JUnitCore;
+import org.eclipse.jdt.launching.IRuntimeClasspathEntry;
+import org.eclipse.jdt.launching.JavaRuntime;
 import org.eclipse.jdt.junit.TestRunListener;
 import org.eclipse.jdt.junit.model.ITestCaseElement;
 import org.eclipse.jdt.junit.model.ITestElement;
@@ -73,6 +75,19 @@ public class JUnitLaunchHelper {
     private static final String ATTR_MAIN_TYPE_NAME = "org.eclipse.jdt.launching.MAIN_TYPE";
     private static final String ATTR_VM_ARGUMENTS = "org.eclipse.jdt.launching.VM_ARGUMENTS";
     private static final String ATTR_PROGRAM_ARGUMENTS = "org.eclipse.jdt.launching.PROGRAM_ARGUMENTS";
+    private static final String ATTR_DEFAULT_CLASSPATH = "org.eclipse.jdt.launching.DEFAULT_CLASSPATH";
+    private static final String ATTR_CLASSPATH = "org.eclipse.jdt.launching.CLASSPATH";
+
+    /**
+     * PDE plug-in nature id. When the user project has this nature, the JDT
+     * JUnit launcher's default classpath resolution path is safe (it walks the
+     * OSGi Bundle's headers, which exist for PDE bundles). When the project
+     * lacks this nature (plain Maven, Gradle, or generic Java), the default
+     * resolution path NPEs on a null Bundle (bugs.md #1) — so we pre-compute
+     * the resolved classpath via {@link JavaRuntime} and pin it on the launch
+     * config to bypass the PDE-aware code path entirely.
+     */
+    private static final String PDE_PLUGIN_NATURE = "org.eclipse.pde.PluginNature";
 
     /** Cap stdout/stderr capture per stream so a chatty test can't blow heap. */
     private static final int STREAM_CAP_BYTES = 1_000_000;
@@ -188,7 +203,8 @@ public class JUnitLaunchHelper {
         return result;
     }
 
-    private static void configureLaunch(ILaunchConfigurationWorkingCopy wc, LaunchRequest req) {
+    private static void configureLaunch(ILaunchConfigurationWorkingCopy wc, LaunchRequest req)
+            throws CoreException {
         wc.setAttribute(ATTR_PROJECT_NAME, req.project.getProject().getName());
         wc.setAttribute(ATTR_TEST_RUNNER_KIND, req.runnerKind.configurationValue());
 
@@ -202,11 +218,43 @@ public class JUnitLaunchHelper {
                 "/" + req.project.getProject().getName() + "/" + req.packageName);
         }
 
+        // bugs.md #1 (Sprint 14): for non-PDE projects (plain Maven / Gradle /
+        // generic Java), pre-compute the resolved runtime classpath via JavaRuntime
+        // and pin it on the launch config. Without this, JDT's JUnit launcher
+        // walks the (non-existent) OSGi Bundle for the project and NPEs on
+        // Bundle.getHeaders(). PDE projects still use the default path so
+        // Require-Bundle resolution against the workspace bundle pool stays
+        // intact.
+        if (!hasPdeNature(req.project)) {
+            wc.setAttribute(ATTR_DEFAULT_CLASSPATH, false);
+            wc.setAttribute(ATTR_CLASSPATH, computeRuntimeClasspathMementos(req.project));
+        }
+
         if (req.vmArgs != null && !req.vmArgs.isEmpty()) {
             wc.setAttribute(ATTR_VM_ARGUMENTS, String.join(" ", req.vmArgs));
         }
         wc.setAttribute(ATTR_PROGRAM_ARGUMENTS, "");
         wc.setAttribute("org.eclipse.debug.core.ATTR_REMOVE_TERMINATED", true);
+    }
+
+    private static boolean hasPdeNature(IJavaProject project) {
+        try {
+            return project.getProject().hasNature(PDE_PLUGIN_NATURE);
+        } catch (CoreException e) {
+            log.debug("hasNature({}) on '{}' failed; treating as non-PDE: {}",
+                PDE_PLUGIN_NATURE, project.getElementName(), e.getMessage());
+            return false;
+        }
+    }
+
+    private static List<String> computeRuntimeClasspathMementos(IJavaProject project)
+            throws CoreException {
+        IRuntimeClasspathEntry[] entries = JavaRuntime.computeUnresolvedRuntimeClasspath(project);
+        List<String> mementos = new ArrayList<>(entries.length);
+        for (IRuntimeClasspathEntry entry : entries) {
+            mementos.add(entry.getMemento());
+        }
+        return mementos;
     }
 
     private static boolean allTerminated(ILaunch launch) {

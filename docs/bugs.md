@@ -509,7 +509,7 @@ In the search-symbols handler, after collecting candidate entries, drop those wh
 
 ## #1 — `run_tests` returns `INTERNAL_ERROR` (NPE on `Bundle.getHeaders()`) for plain Maven projects
 
-- **Status:** FIXED in v1.7.1 *(workaround dispatch; full launch path tracked for v1.8.0)*
+- **Status:** FIXED in v1.8.0 *(workaround dispatch removed; full Maven / Gradle / generic-Java launch path lands via explicit pre-computed runtime classpath that bypasses the JDT JUnit launcher's PluginClasspathProvider; end-to-end happy-path JVM-spawning verification still waits on the fixture-build pipeline, see `docs/upgrade-checklist.md` and `RunTestsToolTest`'s `@Disabled` happy tests)*
 - **Date observed:** 2026-05-01
 - **Reporter:** Claude (Sonnet 4.6 / Opus 4.7) via `jl-jats-orb-ws` workspace
 - **Server version:** 2.0.0-SNAPSHOT (per `health_check`)
