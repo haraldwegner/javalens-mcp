@@ -171,7 +171,7 @@ JDT's incremental compiler reuses class files compiled against the OLD record/co
 
 ## #7 — `add_project` on the fork's own multi-module repo fails with "Build path contains duplicate entry: gradle-tooling-api-8.10.jar"
 
-- **Status:** OPEN
+- **Status:** FIXED in v1.8.0
 - **Date observed:** 2026-05-11 (during v1.7.1 post-fix smoke)
 - **Reporter:** Claude (Opus 4.7), via `jl-javalens-ws`
 - **Server version:** 1.7.1

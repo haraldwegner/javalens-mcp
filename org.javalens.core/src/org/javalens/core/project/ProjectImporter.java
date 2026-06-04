@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -356,6 +357,21 @@ public class ProjectImporter {
 
     private void addDependencyEntries(List<IClasspathEntry> entries, java.nio.file.Path projectPath,
             org.javalens.core.workspace.WorkspaceManager workspaceManager) {
+        // Bug #7 (Sprint 14): dedupe library and project entries by IPath
+        // before passing to setRawClasspath(). JDT throws
+        // "Build path contains duplicate entry" on any dup. Sources of
+        // duplication seen in production:
+        //   1. .classpath listing the same jar twice.
+        //   2. .classpath kind="lib" AND a build-system path both contributing
+        //      the same resolved jar (the fork's own multi-module repo, where
+        //      gradle-tooling-api-8.10.jar surfaces from both).
+        //   3. Compiled-output directories overlapping a .classpath entry.
+        //   4. Multiple Require-Bundle headers resolving to the same workspace
+        //      sibling.
+        // First occurrence wins; subsequent duplicates are dropped silently.
+        Set<IPath> addedLibPaths = new HashSet<>();
+        Set<IPath> addedProjectPaths = new HashSet<>();
+
         // Eclipse .classpath kind="lib" entries (ADR 0001).
         // Merged alongside build-system-resolved deps; pure-Eclipse projects without a pom
         // get full dependency resolution from .classpath alone.
@@ -364,8 +380,10 @@ public class ProjectImporter {
         for (java.nio.file.Path lib : cp.libPaths()) {
             if (Files.isRegularFile(lib)) {
                 IPath eclipsePath = new Path(lib.toString());
-                entries.add(JavaCore.newLibraryEntry(eclipsePath, null, null));
-                classpathLibCount++;
+                if (addedLibPaths.add(eclipsePath)) {
+                    entries.add(JavaCore.newLibraryEntry(eclipsePath, null, null));
+                    classpathLibCount++;
+                }
             }
         }
 
@@ -386,7 +404,9 @@ public class ProjectImporter {
             java.nio.file.Path jarPath = java.nio.file.Path.of(jar);
             if (Files.exists(jarPath)) {
                 IPath eclipsePath = new Path(jar);
-                entries.add(JavaCore.newLibraryEntry(eclipsePath, null, null));
+                if (addedLibPaths.add(eclipsePath)) {
+                    entries.add(JavaCore.newLibraryEntry(eclipsePath, null, null));
+                }
             }
         }
 
@@ -395,11 +415,11 @@ public class ProjectImporter {
         }
 
         // Add compiled classes directories (Maven)
-        addIfExists(entries, projectPath, "target/classes");
-        addIfExists(entries, projectPath, "target/test-classes");
+        addIfExists(entries, projectPath, "target/classes", addedLibPaths);
+        addIfExists(entries, projectPath, "target/test-classes", addedLibPaths);
         // Add compiled classes directories (Gradle)
-        addIfExists(entries, projectPath, "build/classes/java/main");
-        addIfExists(entries, projectPath, "build/classes/java/test");
+        addIfExists(entries, projectPath, "build/classes/java/main", addedLibPaths);
+        addIfExists(entries, projectPath, "build/classes/java/test", addedLibPaths);
 
         // Sprint 11 Phase B: workspace bundle pool — resolve Require-Bundle
         // entries against sibling projects already loaded into the workspace.
@@ -412,8 +432,11 @@ public class ProjectImporter {
                 Optional<org.eclipse.jdt.core.IJavaProject> sibling =
                     workspaceManager.resolveBundle(required);
                 if (sibling.isPresent()) {
-                    entries.add(JavaCore.newProjectEntry(sibling.get().getPath()));
-                    bundleEntries++;
+                    IPath projPath = sibling.get().getPath();
+                    if (addedProjectPaths.add(projPath)) {
+                        entries.add(JavaCore.newProjectEntry(projPath));
+                        bundleEntries++;
+                    }
                 } else {
                     log.debug("Require-Bundle '{}' not found in workspace bundle pool; skipping", required);
                 }
@@ -426,11 +449,14 @@ public class ProjectImporter {
         log.info("Added {} dependency entries from {}", jars.size(), buildSystem);
     }
 
-    private void addIfExists(List<IClasspathEntry> entries, java.nio.file.Path projectPath, String relativePath) {
+    private void addIfExists(List<IClasspathEntry> entries, java.nio.file.Path projectPath,
+                              String relativePath, Set<IPath> addedLibPaths) {
         java.nio.file.Path fullPath = projectPath.resolve(relativePath);
         if (Files.exists(fullPath) && Files.isDirectory(fullPath)) {
             IPath eclipsePath = new Path(fullPath.toString());
-            entries.add(JavaCore.newLibraryEntry(eclipsePath, null, null));
+            if (addedLibPaths.add(eclipsePath)) {
+                entries.add(JavaCore.newLibraryEntry(eclipsePath, null, null));
+            }
         }
     }
 
