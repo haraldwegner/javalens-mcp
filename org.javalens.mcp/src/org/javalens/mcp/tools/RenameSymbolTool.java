@@ -16,6 +16,8 @@ import org.eclipse.jdt.core.dom.ASTParser;
 import org.eclipse.jdt.core.dom.ASTVisitor;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.IBinding;
+import org.eclipse.jdt.core.dom.IMethodBinding;
+import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.SimpleName;
 import org.javalens.core.IJdtService;
 import org.javalens.mcp.models.ResponseMeta;
@@ -162,6 +164,16 @@ public class RenameSymbolTool extends AbstractTool {
                 log.debug("Using handle identifier as fallback: {}", targetKey);
             }
 
+            // Sprint 14 (bugs.md #13): when renaming a TYPE, constructor
+            // declarations bear the old type name as their SimpleName but
+            // resolve to a constructor (IMethodBinding), not the type
+            // binding. The standard rename walker (binding-key match against
+            // the renamed symbol) therefore misses them. We pass this flag
+            // into findRenameEdits to enable a second match branch that
+            // emits an edit when the SimpleName resolves to a constructor
+            // whose declaring class matches the renamed type.
+            boolean renamingAType = (element instanceof IType);
+
             // Find all references across project
             Map<String, List<Map<String, Object>>> editsByFile = new LinkedHashMap<>();
             int totalEdits = 0;
@@ -178,7 +190,7 @@ public class RenameSymbolTool extends AbstractTool {
                     CompilationUnit sourceAst = (CompilationUnit) sourceParser.createAST(null);
 
                     List<Map<String, Object>> fileEdits = findRenameEdits(
-                        sourceAst, targetKey, oldName, newName
+                        sourceAst, targetKey, oldName, newName, renamingAType
                     );
 
                     if (!fileEdits.isEmpty()) {
@@ -219,7 +231,8 @@ public class RenameSymbolTool extends AbstractTool {
     }
 
     private List<Map<String, Object>> findRenameEdits(CompilationUnit ast, String targetKey,
-                                                       String oldName, String newName) {
+                                                       String oldName, String newName,
+                                                       boolean renamingAType) {
         List<Map<String, Object>> edits = new ArrayList<>();
 
         ast.accept(new ASTVisitor() {
@@ -230,7 +243,30 @@ public class RenameSymbolTool extends AbstractTool {
                 }
 
                 IBinding nodeBinding = node.resolveBinding();
-                if (nodeBinding != null && targetKey.equals(nodeBinding.getKey())) {
+                if (nodeBinding == null) {
+                    return true;
+                }
+
+                boolean matches = targetKey.equals(nodeBinding.getKey());
+
+                // Sprint 14 (bugs.md #13): constructor declaration post-pass.
+                // When renaming a type, constructor SimpleNames resolve to the
+                // constructor (an IMethodBinding), NOT to the type binding —
+                // so the targetKey match above misses them. Match here when:
+                //   - we're renaming a type, AND
+                //   - the resolved binding is a constructor, AND
+                //   - the constructor's declaring class matches the renamed type.
+                if (!matches && renamingAType
+                        && nodeBinding instanceof IMethodBinding methodBinding
+                        && methodBinding.isConstructor()) {
+                    ITypeBinding declaringClass = methodBinding.getDeclaringClass();
+                    if (declaringClass != null
+                            && targetKey.equals(declaringClass.getKey())) {
+                        matches = true;
+                    }
+                }
+
+                if (matches) {
                     Map<String, Object> edit = new LinkedHashMap<>();
                     edit.put("line", ast.getLineNumber(node.getStartPosition()) - 1);
                     edit.put("column", ast.getColumnNumber(node.getStartPosition()));

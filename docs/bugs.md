@@ -7,6 +7,50 @@ For each entry include: ID, date observed, severity, reproducer, expected vs act
 
 ---
 
+## #13 — `rename_symbol` misses constructor declarations when renaming a type
+
+- **Status:** FIXED in v1.8.0
+- **Date observed:** 2026-06-03 (ORB-Java refactoring session, captured in `~/.claude/projects/-home-harald-CursorProjects-ORB/memory/feedback_javalens_usage_learnings.md`)
+- **Reporter:** Claude (Opus 4.7)
+- **Server version:** 1.7.x
+- **Severity:** MEDIUM — silently produces broken code when renaming a class that has explicit constructors; the agent applies the rename and then has to spot-fix constructor declarations manually.
+
+### Reproducer
+
+```java
+public class Foo {
+    public Foo() {}
+    public Foo(int x) {}
+}
+```
+
+`rename_symbol(filePath=".../Foo.java", line=0, column=13, newName="Bar")` returns edits for:
+- The class declaration `Foo` → `Bar`.
+- Every `new Foo()` / `Foo.something()` / `Foo bar` reference in the workspace.
+
+But NOT for the constructor declarations `Foo()` and `Foo(int x)`. After applying the edits, the file reads:
+
+```java
+public class Bar {
+    public Foo() {}     // still says Foo — compile error
+    public Foo(int x) {} // still says Foo — compile error
+}
+```
+
+### Root cause
+
+`RenameSymbolTool`'s AST visitor matches `SimpleName` nodes whose resolved binding key equals the target type's binding key. The constructor declaration's `SimpleName` (the part with the same identifier as the type) resolves to an `IMethodBinding` (the constructor), not to the `ITypeBinding`. So the standard binding-key match misses it.
+
+### Fix
+
+Add a second match branch in the visitor: when `renamingAType` is true AND the resolved binding is an `IMethodBinding` whose `isConstructor()` is true AND its `getDeclaringClass()` binding key matches the renamed type, emit the edit. Idempotent — each constructor's `SimpleName` is visited once, so no double-edit risk.
+
+### Cross-reference
+
+- v1.8.0 changes: [`RenameSymbolTool.findRenameEdits`](../org.javalens.mcp/src/org/javalens/mcp/tools/RenameSymbolTool.java) + two new tests in `RenameSymbolToolTest`.
+
+---
+
 ## #12 — `find_implementations` / `find_field_writes` require exact `(filePath,line,column)`; no FQN/type-scoped path, and the constraint is undocumented
 
 - **Status:** OPEN

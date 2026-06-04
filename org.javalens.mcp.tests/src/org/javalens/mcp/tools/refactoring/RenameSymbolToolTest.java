@@ -52,6 +52,85 @@ class RenameSymbolToolTest {
 
     // ========== Comprehensive Functionality Tests ==========
 
+    // ========== Sprint 14 / bugs.md #13 — constructor post-pass ==========
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #13): renaming a class also emits edits for its explicit constructors")
+    void renameClass_alsoEmitsConstructorEdits() {
+        // HelloWorld.java declares two explicit constructors at 1-based lines
+        // 12 and 20 (zero-based 11 and 19). Pre-fix, the constructor SimpleNames
+        // resolved to IMethodBinding (the constructor), so the targetKey-match
+        // (against the type binding) missed them. Post-fix the visitor also
+        // matches constructors whose declaring class is the renamed type.
+        String helloWorldPath = projectPath.resolve("src/main/java/com/example/HelloWorld.java").toString();
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", helloWorldPath);
+        args.put("line", 5);    // 0-based: "public class HelloWorld {"
+        args.put("column", 13); // 0-based: H of HelloWorld
+        args.put("newName", "Greeting");
+
+        ToolResponse response = tool.execute(args);
+
+        assertTrue(response.isSuccess(),
+            "rename HelloWorld → Greeting must succeed; got: " + response.getError());
+        Map<String, Object> data = getData(response);
+        assertEquals("HelloWorld", data.get("oldName"));
+        assertEquals("Greeting", data.get("newName"));
+        assertEquals("Class", data.get("symbolKind"));
+
+        // Find the HelloWorld.java entry in editsByFile by path suffix.
+        Map<String, List<Map<String, Object>>> editsByFile = getEditsByFile(data);
+        String helloKey = editsByFile.keySet().stream()
+            .filter(k -> k.endsWith("HelloWorld.java"))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError(
+                "HelloWorld.java entry missing in editsByFile; keys=" + editsByFile.keySet()));
+        List<Map<String, Object>> helloEdits = editsByFile.get(helloKey);
+
+        java.util.Set<Integer> editLines = new java.util.HashSet<>();
+        for (Map<String, Object> e : helloEdits) {
+            editLines.add(((Number) e.get("line")).intValue());
+            // Each edit must have the correct oldText/newText shape.
+            assertEquals("HelloWorld", e.get("oldText"));
+            assertEquals("Greeting", e.get("newText"));
+        }
+        assertTrue(editLines.contains(11),
+            "Constructor declaration at 0-based line 11 (HelloWorld()) must be in edits; saw lines=" + editLines);
+        assertTrue(editLines.contains(19),
+            "Constructor declaration at 0-based line 19 (HelloWorld(String)) must be in edits; saw lines=" + editLines);
+    }
+
+    @Test
+    @DisplayName("Sprint 14 (bugs.md #13): renaming a non-type does NOT emit constructor edits (regression guard)")
+    void renameLocalVariable_doesNotEmitConstructorEdits() {
+        // Constructor-rename logic gates on `renamingAType`. When renaming a
+        // local variable (not a type), the constructor branch in the visitor
+        // must NOT fire — even if a constructor happens to share the local's
+        // name. RefactoringTarget.java's `oldName` local variable is a clean
+        // existing test target.
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", refactoringTargetPath);
+        args.put("line", 88);    // existing test fixture: int oldName = 42;
+        args.put("column", 12);
+        args.put("newName", "renamedLocal");
+
+        ToolResponse response = tool.execute(args);
+
+        assertTrue(response.isSuccess(),
+            "rename local variable must succeed; got: " + response.getError());
+        Map<String, Object> data = getData(response);
+        assertEquals("LocalVariable", data.get("symbolKind"));
+        // No constructor branch should have fired — every edit's oldText is
+        // "oldName" and the edits belong to the local variable's scope.
+        Map<String, List<Map<String, Object>>> editsByFile = getEditsByFile(data);
+        for (List<Map<String, Object>> fileEdits : editsByFile.values()) {
+            for (Map<String, Object> e : fileEdits) {
+                assertEquals("oldName", e.get("oldText"),
+                    "rename of a local must not pick up constructors of a same-name type");
+            }
+        }
+    }
+
     @Test
     @DisplayName("rename local variable returns complete response with all edit details")
     void renameLocalVariable_returnsCompleteResponse() {
