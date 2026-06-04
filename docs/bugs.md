@@ -279,7 +279,7 @@ In `ProjectImporter.addDependencyEntries()` (or the upstream classpath-collectio
 
 ## #6 — `WorkspaceFileWatcher` doesn't reflect live `workspace.json` edits
 
-- **Status:** FIXED in v1.8.0 *(belt-and-braces robustness: polled-with-timeout loop replaces the blocking `take()`, 50 ms debounce + event-drain absorbs tmp+rename bursts, OVERFLOW events trigger unconditional reconcile, `try/catch` around the full loop iteration prevents silent thread death, and a periodic mtime-fallback poll guarantees reconciliation every 2 s even if WatchService silently misses an event — the suspected production cause that proved hard to reproduce in tests since existing fixtures already cover atomic-rename via `Files.move(... ATOMIC_MOVE)`.)*
+- **Status:** FIXED in v1.8.0 *(belt-and-braces robustness: polled-with-timeout loop replaces the blocking `take()`, 50 ms debounce + event-drain absorbs tmp+rename bursts, OVERFLOW events trigger unconditional reconcile, `try/catch` around the full loop iteration prevents silent thread death, and a periodic mtime-fallback poll guarantees reconciliation every 2 s even if WatchService silently misses an event — the suspected production cause that proved hard to reproduce in tests since existing fixtures already cover atomic-rename via `Files.move(... ATOMIC_MOVE)`. Manual override: the new `refresh_workspace` tool (Phase B.1 / v1.8.0) gives the agent an explicit knob to force reconciliation if a watcher gap ever surfaces in production.)*
 - **Date observed:** 2026-05-11 (during v1.7.1 post-fix smoke)
 - **Reporter:** Claude (Opus 4.7)
 - **Server version:** 1.7.1
