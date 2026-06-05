@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
 
-**76 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, LTK-backed structural refactorings, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
+**75 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, LTK-backed structural refactorings, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
 
 Battle-tested daily on multi-project codebases via the companion **[javalens-manager](https://github.com/hw1964/javalens-manager)** desktop control plane. Improvement loop is live: features, fixes, and ergonomics ship in response to refactoring sessions in production. See the [roadmap](docs/sprints/) for what's coming and the [release notes](docs/release-notes/) for what just shipped.
 
@@ -93,7 +93,7 @@ Two PDE bundles loaded into one workspace where bundle A's `Require-Bundle` list
 
 ### Tool-surface progression (v1.5.0 — v1.7.0)
 
-Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 76 in v1.8.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
+Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 75 in v1.8.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
 
 - **`find_pattern_usages(kind, query)`** — `kind ∈ { annotation, instantiation, type_argument, cast, instanceof }`.
 - **`find_quality_issue(kind, …)`** — `kind ∈ { naming, bugs, unused, large_classes, circular_deps, reflection, throws, catches }`.
@@ -206,7 +206,7 @@ The watcher loads them on startup and reconciles edits live. For single-project 
 
 ---
 
-## Tools (73 in v1.7.0)
+## Tools (75 in v1.8.0)
 
 ### Workspace administration (5)
 
@@ -242,14 +242,16 @@ The watcher loads them on startup and reconciles edits live. For single-project 
 
 **Structural (LTK-backed, v1.5.1):** `move_class`, `move_package`, `pull_up`, `push_down`, `encapsulate_field`.
 
-### Verification (2, v1.6.0)
+### Verification (4)
 
-| Tool | What it does |
-|---|---|
-| `compile_workspace` | Incremental Java build over every loaded project; refreshes local resources first; aggregates `IMarker` problem markers (compile errors, warnings, project-level errors). One call, no per-file walk. |
-| `run_tests` | Launches JUnit 4 / 5 / TestNG via JDT-LTK's launching delegate, headless. Scope is `method` / `class` / `package`. Returns parsed pass/fail/skipped counts plus per-failure stack traces, with stdout/stderr tail capture. |
+| Tool | What it does | Since |
+|---|---|---|
+| `compile_workspace` | Incremental Java build over every loaded project; refreshes local resources first; aggregates `IMarker` problem markers (compile errors, warnings, project-level errors). v1.8.0 adds `clean: bool` (force `CLEAN_BUILD` for record / signature shape changes) and `scope: "main"\|"test"\|"both"` (default `"both"` — test-source errors no longer silently pass). | v1.6.0 |
+| `run_tests` | Launches JUnit 4 / 5 / TestNG via JDT-LTK's launching delegate, headless. Scope is `method` / `class` / `package`. v1.8.0 adds an explicit pre-computed runtime classpath for plain Maven / Gradle / generic-Java projects (bypasses the OSGi-assuming JDT launcher). | v1.6.0 |
+| `refresh_workspace` | Consolidated lifecycle tool: `IResource.refreshLocal(DEPTH_INFINITE)` + `CLEAN_BUILD` + `FULL_BUILD` + preserves `projectKey` state. Manual override when the file-watcher misses an external `Write` / `Edit`. Optional `projectKey` scopes to one project. | v1.8.0 |
+| `find_duplicate_code` | Workspace-scoped clone detection: normalised-token sequence over every `IMethod` body, group by exact match. Knobs: `minTokens` (default 50), `crossProject` (default `false`). Read-only. | v1.8.0 |
 
-See [`docs/release-notes/v1.6.0.md`](docs/release-notes/v1.6.0.md) for the full input/result contract and the v1.6.0 known limitation (3 `run_tests` happy-path tests `@Disabled` pending the v1.6.1 fixture-build pipeline).
+See [`docs/release-notes/v1.6.0.md`](docs/release-notes/v1.6.0.md) and [`docs/release-notes/v1.8.0.md`](docs/release-notes/v1.8.0.md) for the full input/result contracts and known limitations (3 `run_tests` happy-path tests stay `@Disabled` pending the fixture-build pipeline).
 
 ### Code generation (6, v1.7.0)
 
@@ -264,15 +266,15 @@ See [`docs/release-notes/v1.6.0.md`](docs/release-notes/v1.6.0.md) for the full 
 
 All Ring 2 tools build via `ASTRewrite` directly — they do **not** require the `org.eclipse.jdt.ui` bundle. See [`docs/release-notes/v1.7.0.md`](docs/release-notes/v1.7.0.md) for the contract.
 
-### Build & dependency management (3, v1.7.0 — Maven-only)
+### Build & dependency management (3, Maven + Gradle)
 
 | Tool | What it does |
 |---|---|
-| `add_dependency` | Adds a `<dependency>` to `pom.xml`. Refuses duplicates. Text-level mutation preserves formatting + comments. |
-| `update_dependency` | Bumps the `<version>` of an existing dep in place. |
+| `add_dependency` | Adds a `<dependency>` to `pom.xml`, or a configured-block line (`implementation`, `testImplementation`, …) to `build.gradle` / `build.gradle.kts`. Refuses duplicates. Text-level mutation preserves formatting + comments. |
+| `update_dependency` | Bumps the version of an existing dep in place. Maven `<version>` element or Gradle dep coordinate. |
 | `find_unused_dependencies` | Read-only: lists deps whose packages don't appear in any source import. Heuristic; treat as suggestions. |
 
-Gradle support is **explicitly deferred to v1.8.x**.
+Detection: `pom.xml` (Maven) takes precedence; falls back to `build.gradle` / `build.gradle.kts` (Gradle) when no `pom.xml` is present. Gradle path is text-level via the shared `GradleBuildSupport` helper (since v1.8.0). Buildship target-platform integration is deferred to v1.8.x.x — call `refresh_workspace` after a Gradle dep write to sync the JDT classpath.
 
 ### Workflow polish (2, v1.7.0)
 
@@ -363,7 +365,7 @@ cd javalens-mcp
 mvn clean verify
 ```
 
-Distribution archives are written to `org.javalens.product/target/products/`. Test counts as of v1.7.0: **122/122** in `org.javalens.core.tests`, **441/446** in `org.javalens.mcp.tests` (5 `@Disabled`: 1 `EncapsulateField` happy-path from v1.5.2; 3 `run_tests` happy-paths from v1.6.0; 1 `generate_test_skeleton` auto-detect path — see [`docs/upgrade-checklist.md`](docs/upgrade-checklist.md)).
+Distribution archives are written to `org.javalens.product/target/products/`. Test counts as of v1.8.0: **122/122** in `org.javalens.core.tests`, **510/515** in `org.javalens.mcp.tests` (5 `@Disabled`: 1 `EncapsulateField` happy-path from v1.5.2; 3 `run_tests` happy-paths from v1.6.0; 1 `generate_test_skeleton` auto-detect path — see [`docs/upgrade-checklist.md`](docs/upgrade-checklist.md)).
 
 ### Build prerequisites
 
@@ -386,9 +388,9 @@ When you change the Eclipse release the fork builds against (currently 2024-09),
                             │ JSON-RPC over stdio
 ┌─────────────────────────────────────────────────────────────────┐
 │  org.javalens.mcp                                               │
-│    JavaLensApplication → ToolRegistry → 73 tools                │
+│    JavaLensApplication → ToolRegistry → 75 tools                │
 │      • workspace admin · navigation · search · analysis         │
-│      • refactoring (15) · verification (2) · codegen (6)        │
+│      • refactoring (15) · verification (4) · codegen (6)        │
 │      • dep management (3) · workflow polish (2) · quick fixes   │
 └─────────────────────────────────────────────────────────────────┘
                             │
@@ -412,7 +414,7 @@ When you change the Eclipse release the fork builds against (currently 2024-09),
 
 Active and future sprint backlogs live under [`docs/sprints/`](docs/sprints/). Highlights:
 
-- **v1.8.0 (Sprint 14, in flight)** — lifecycle-hygiene bug bundle + `refresh_workspace` consolidated tool + FQN-based `find_*` overloads + `find_duplicate_code` (clone detection) + Gradle path for the Ring 3 dep tools.
+- **v1.8.0 (Sprint 14, shipped 2026-06-04)** — lifecycle-hygiene bug bundle + `refresh_workspace` consolidated tool + FQN-based `find_*` overloads + `find_duplicate_code` (clone detection) + Gradle path for the Ring 3 dep tools.
 - **Sprint 15+** — scaffolds for Fowler smell detection (~18 tools, the biggest single gap), modernisation sweeps (`var`/records/sealed/pattern-switch), multi-step refactoring orchestration (preview → apply gate + rollback), Kerievsky pattern transformations, SOLID violation detection, Android read-only tooling, HTTP/SSE transport, upstream-parity audit.
 
 The improvement direction is set by live refactoring sessions on real-world Java workspaces, not roadmap-deck speculation. If a tool surfaces friction repeatedly, it gets a sprint.
@@ -423,14 +425,14 @@ The improvement direction is set by live refactoring sessions on real-world Java
 
 This project started in 2025 as a fork of [pzalutski-pixel/javalens-mcp](https://github.com/pzalutski-pixel/javalens-mcp). The original v1.0–v1.2 work — Eclipse-JDT integration layer, the initial tool surface, the OSGi/Equinox plumbing — is by Piotr Zalutski and remains the load-bearing foundation.
 
-From v1.3.0 onward the fork has diverged substantially across nine numbered sprints. Per-workspace tool count progression: **upstream v1.2 baseline → 66 → 55 (Sprint 11 parametric consolidation) → 60 → 62 → 73 (Sprint 13) → 76 (Sprint 14, v1.8.0)**. Major themes added by the fork:
+From v1.3.0 onward the fork has diverged substantially across nine numbered sprints. Per-workspace tool count progression: **upstream v1.2 baseline → 66 → 55 (Sprint 11 parametric consolidation) → 60 → 62 → 73 (Sprint 13) → 75 (Sprint 14, v1.8.0)**. Major themes added by the fork:
 
 - **Multi-project workspaces** (v1.3.0, Sprint 9) — one javalens process serves many sibling projects with workspace-scoped cross-project search.
 - **Live workspace.json reconciliation** (v1.4.0, Sprint 10) — `WorkspaceFileWatcher`.
 - **Detection-matrix completion + LTK structural refactorings** (v1.5.x, Sprint 11) — Tycho-aware Maven, workspace bundle pool for PDE, Gradle Tooling API, plus five LTK structural refactorings (`move_class`, `move_package`, `pull_up`, `push_down`, `encapsulate_field`).
 - **Workspace verification** (v1.6.0, Sprint 12) — `compile_workspace` + `run_tests`.
 - **Code generation + dependency management + workflow polish** (v1.7.0, Sprint 13) — 11 new tools across three rings (Ring 2 codegen, Ring 3 Maven dep mgmt, Ring 4 polish).
-- **Companion manager + lifecycle hygiene** (Sprint 14, v1.8.0 in flight) — see Roadmap.
+- **Companion manager + lifecycle hygiene** (Sprint 14, v1.8.0 shipped 2026-06-04) — see Roadmap.
 
 See [`docs/release-notes/`](docs/release-notes/) for per-release detail.
 
