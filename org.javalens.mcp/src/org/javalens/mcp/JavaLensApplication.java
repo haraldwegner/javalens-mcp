@@ -85,8 +85,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.javalens.core.JdtServiceImpl;
+import org.javalens.mcp.transport.HttpTransport;
 import org.javalens.mcp.transport.StdioTransport;
+import org.javalens.mcp.transport.TokenGenerator;
 import org.javalens.mcp.transport.Transport;
+import org.javalens.mcp.transport.TransportConfig;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -136,6 +139,14 @@ public class JavaLensApplication implements IApplication {
         log.info("JavaLens MCP Server starting...");
         instance = this;
 
+        // Sprint 14a Stage 2: parse transport CLI flags from the application
+        // argv. HTTP is the default; -transport stdio opts back to the
+        // pre-Sprint-14a behaviour. Unknown flags (Eclipse -data / -clean /
+        // etc.) pass through. The actual HttpTransport impl lands in Stage 3.
+        String[] cliArgs = (String[]) context.getArguments().get(IApplicationContext.APPLICATION_ARGS);
+        TransportConfig transportConfig = TransportConfig.fromArgs(cliArgs);
+        log.info("Transport selection: {}", transportConfig);
+
         // Initialize tool registry and register tools
         toolRegistry = new ToolRegistry();
         registerTools();
@@ -153,7 +164,7 @@ public class JavaLensApplication implements IApplication {
         CompletableFuture.runAsync(this::autoLoadProjects);
 
         // Run the main message loop (starts immediately, doesn't wait for project load)
-        runMessageLoop();
+        runMessageLoop(transportConfig);
 
         log.info("JavaLens MCP Server stopped");
         return IApplication.EXIT_OK;
@@ -443,12 +454,11 @@ public class JavaLensApplication implements IApplication {
         // find_quality_issue(kind=...) above.
     }
 
-    private void runMessageLoop() {
-        // Sprint 14a Stage 1: the stdio loop now goes through the Transport
-        // seam. Behaviour is preserved exactly (UTF-8, blank-line skipping,
-        // auto-flush on write). Stage 3 introduces HttpTransport behind the
-        // same interface; the loop here doesn't change.
-        try (Transport transport = new StdioTransport(System.in, System.out)) {
+    private void runMessageLoop(TransportConfig config) {
+        // Sprint 14a Stage 1+2: the loop goes through the Transport seam.
+        // Behaviour is preserved exactly for stdio; HTTP is selected via
+        // -transport flag (default) and stubbed until Stage 3.
+        try (Transport transport = openTransport(config)) {
             log.debug("Entering message loop");
 
             while (running) {
@@ -473,6 +483,25 @@ public class JavaLensApplication implements IApplication {
         } catch (Exception e) {
             log.error("Error in message loop", e);
         }
+    }
+
+    /**
+     * Sprint 14a Stage 2: construct the Transport per the parsed CLI config.
+     * STDIO wraps System.in/out (current behaviour, opt-in only). HTTP
+     * resolves the token (generate if absent) and hands off to HttpTransport
+     * which throws until Stage 3 implements it.
+     */
+    private Transport openTransport(TransportConfig config) {
+        if (config.getKind() == TransportConfig.Kind.STDIO) {
+            log.info("Transport: stdio (opt-in via -transport stdio)");
+            return new StdioTransport(System.in, System.out);
+        }
+        String token = config.getToken() != null
+            ? config.getToken()
+            : TokenGenerator.generate();
+        log.info("Transport: http (default) — port={}, bind={}",
+            config.getPort(), config.getBindAddress());
+        return new HttpTransport(config.getPort(), config.getBindAddress(), token);
     }
 
     @Override
