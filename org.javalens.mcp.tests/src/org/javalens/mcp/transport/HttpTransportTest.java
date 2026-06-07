@@ -3,13 +3,19 @@ package org.javalens.mcp.transport;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -187,6 +193,114 @@ class HttpTransportTest {
             () -> new HttpTransport(0, "127.0.0.1", ""));
     }
 
+    // ===== Stage 4: SSE channel /mcp/events =====
+
+    @Test
+    @DisplayName("sseRequiresAuth — GET /mcp/events without Authorization → 401")
+    void sseRequiresAuth() throws Exception {
+        try (TestServer server = new TestServer(msg -> "")) {
+            HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + server.port() + "/mcp/events"))
+                .GET()
+                .build();
+            HttpResponse<String> resp = HttpClient.newHttpClient()
+                .send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertEquals(401, resp.statusCode());
+        }
+    }
+
+    @Test
+    @DisplayName("sseNonGetReturns405 — POST /mcp/events → 405")
+    void sseNonGetReturns405() throws Exception {
+        try (TestServer server = new TestServer(msg -> "")) {
+            HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + server.port() + "/mcp/events"))
+                .header("Authorization", "Bearer " + TOKEN)
+                .POST(HttpRequest.BodyPublishers.ofString(""))
+                .build();
+            HttpResponse<String> resp = HttpClient.newHttpClient()
+                .send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertEquals(405, resp.statusCode());
+        }
+    }
+
+    @Test
+    @DisplayName("sseEmitsReadyEvent — initial event on subscription is `ready`")
+    void sseEmitsReadyEvent() throws Exception {
+        try (TestServer server = new TestServer(msg -> "")) {
+            try (SseClient client = SseClient.open(server.port(), TOKEN)) {
+                assertEquals(200, client.statusCode());
+                assertEquals("text/event-stream; charset=utf-8",
+                    client.contentType(), "expected SSE Content-Type header");
+
+                SseFrame frame = client.readFrame(Duration.ofSeconds(2));
+                assertEquals("ready", frame.type, "first event must be `ready`");
+                assertEquals("{}", frame.data);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("heartbeatFiresPeriodically — short interval produces several heartbeats")
+    void heartbeatFiresPeriodically() throws Exception {
+        try (TestServer server = new TestServer(msg -> "", Duration.ofMillis(50))) {
+            try (SseClient client = SseClient.open(server.port(), TOKEN)) {
+                // Consume the initial `ready` event.
+                SseFrame ready = client.readFrame(Duration.ofSeconds(2));
+                assertEquals("ready", ready.type);
+
+                // Heartbeat interval is 50ms; should see at least 3 in 500ms.
+                int heartbeats = 0;
+                long deadline = System.currentTimeMillis() + 1000;
+                while (heartbeats < 3 && System.currentTimeMillis() < deadline) {
+                    SseFrame frame = client.readFrame(Duration.ofMillis(500));
+                    if (frame == null) break;
+                    if ("heartbeat".equals(frame.type)) {
+                        heartbeats++;
+                    }
+                }
+                assertTrue(heartbeats >= 3,
+                    "expected ≥3 heartbeats at 50ms interval in 1s, got: " + heartbeats);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("sendEventBroadcastsToSubscribers — transport.sendEvent reaches subscribed client")
+    void sendEventBroadcastsToSubscribers() throws Exception {
+        // Long heartbeat so the test doesn't race with heartbeat frames.
+        try (TestServer server = new TestServer(msg -> "", Duration.ofSeconds(30))) {
+            try (SseClient client = SseClient.open(server.port(), TOKEN)) {
+                // Consume `ready`
+                SseFrame ready = client.readFrame(Duration.ofSeconds(2));
+                assertEquals("ready", ready.type);
+
+                // Broadcast a custom event from the server side.
+                server.transport.sendEvent("progress", "{\"pct\":42}");
+
+                SseFrame received = client.readFrame(Duration.ofSeconds(2));
+                assertEquals("progress", received.type);
+                assertEquals("{\"pct\":42}", received.data);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("subscribersRemovedOnDisconnect — closing client drops it from broadcast set")
+    void subscribersRemovedOnDisconnect() throws Exception {
+        try (TestServer server = new TestServer(msg -> "", Duration.ofSeconds(30))) {
+            try (SseClient client = SseClient.open(server.port(), TOKEN)) {
+                client.readFrame(Duration.ofSeconds(2));  // ready
+            }
+            // After close: a subsequent broadcast must not throw or leak.
+            // Give the server a moment to detect the closed subscriber.
+            Thread.sleep(100);
+            // sendEvent is fire-and-forget; the dropped subscriber is the
+            // observation that matters. Just verify no exception.
+            assertDoesNotThrow(() -> server.transport.sendEvent("x", "{}"));
+        }
+    }
+
     // ===== Helpers =====
 
     private static HttpResponse<String> post(int port, String token, String body) throws Exception {
@@ -223,11 +337,17 @@ class HttpTransportTest {
         final int port;
 
         TestServer(Transport.MessageHandler handler) throws Exception {
+            this(handler, null);
+        }
+
+        TestServer(Transport.MessageHandler handler, Duration heartbeatInterval) throws Exception {
             this.originalStdout = System.out;
             this.stdoutCapture = new ByteArrayOutputStream();
             System.setOut(new PrintStream(stdoutCapture, true, StandardCharsets.UTF_8));
 
-            this.transport = new HttpTransport(0, "127.0.0.1", TOKEN);
+            this.transport = (heartbeatInterval == null)
+                ? new HttpTransport(0, "127.0.0.1", TOKEN)
+                : new HttpTransport(0, "127.0.0.1", TOKEN, heartbeatInterval);
             this.runThread = new Thread(() -> {
                 try {
                     transport.run(handler);
@@ -254,6 +374,101 @@ class HttpTransportTest {
             transport.close();
             runThread.join(5000);
             System.setOut(originalStdout);
+        }
+    }
+
+    /**
+     * Simple SSE client: opens GET /mcp/events asynchronously, parses
+     * {@code event: <type>\ndata: <data>\n\n} frames. Reads run on a
+     * background thread; tests poll {@link #readFrame(Duration)} with a
+     * timeout to avoid hangs.
+     */
+    static final class SseClient implements AutoCloseable {
+        private final HttpResponse<InputStream> response;
+        private final BufferedReader reader;
+        private final Thread readerThread;
+        private final java.util.concurrent.BlockingQueue<SseFrame> queue =
+            new java.util.concurrent.LinkedBlockingQueue<>();
+        private volatile boolean closed = false;
+
+        private SseClient(HttpResponse<InputStream> resp) {
+            this.response = resp;
+            this.reader = new BufferedReader(new InputStreamReader(resp.body(), StandardCharsets.UTF_8));
+            this.readerThread = new Thread(this::readLoop, "SseClient-reader");
+            this.readerThread.setDaemon(true);
+            this.readerThread.start();
+        }
+
+        static SseClient open(int port, String token) throws Exception {
+            HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + port + "/mcp/events"))
+                .header("Authorization", "Bearer " + token)
+                .GET()
+                .build();
+            // sendAsync so the call returns once response headers are seen
+            // (the body stream is then read incrementally).
+            CompletableFuture<HttpResponse<InputStream>> future = HttpClient.newHttpClient()
+                .sendAsync(req, HttpResponse.BodyHandlers.ofInputStream());
+            HttpResponse<InputStream> resp = future.get(3, TimeUnit.SECONDS);
+            return new SseClient(resp);
+        }
+
+        int statusCode() {
+            return response.statusCode();
+        }
+
+        String contentType() {
+            return response.headers().firstValue("Content-Type").orElse(null);
+        }
+
+        /**
+         * Block up to {@code timeout} for the next parsed frame. Returns
+         * {@code null} on timeout.
+         */
+        SseFrame readFrame(Duration timeout) throws InterruptedException {
+            return queue.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        private void readLoop() {
+            String currentType = null;
+            String currentData = null;
+            try {
+                String line;
+                while (!closed && (line = reader.readLine()) != null) {
+                    if (line.isEmpty()) {
+                        if (currentType != null) {
+                            queue.put(new SseFrame(currentType, currentData == null ? "" : currentData));
+                            currentType = null;
+                            currentData = null;
+                        }
+                    } else if (line.startsWith("event:")) {
+                        currentType = line.substring("event:".length()).trim();
+                    } else if (line.startsWith("data:")) {
+                        currentData = line.substring("data:".length()).trim();
+                    }
+                    // other line types (id:, retry:, comments) ignored for tests
+                }
+            } catch (Exception e) {
+                // stream closed
+            }
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            try {
+                response.body().close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    static final class SseFrame {
+        final String type;
+        final String data;
+        SseFrame(String type, String data) {
+            this.type = type;
+            this.data = data;
         }
     }
 }
