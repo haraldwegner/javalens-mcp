@@ -117,15 +117,15 @@ curl -X POST http://127.0.0.1:<port>/mcp -H 'Authorization: Bearer <token>' -d '
 
 ## Definition of Done
 
-- [ ] Default `java -jar ... -data <ws>` launches an HTTP server. `curl` round-trip works with Bearer auth.
-- [ ] `-transport stdio` opts back to stdio (regression-tested via the full reactor).
-- [ ] READY line + token contract honored (`readyLineEmittedToStdout` + `tokenNotInStdoutBeyondReadyLine` GREEN).
-- [ ] SSE channel pushes tool-output events (or cut-line noted in release notes).
-- [ ] Bearer auth gates non-authorized requests with 401 (or cut-line noted in release notes).
-- [ ] End-to-end smoke: Claude Desktop / Cursor with HTTP entry connects and runs a refactoring round-trip.
-- [ ] Sandboxed-agent reproduction connects over HTTP (or skipped with reason if nsjail no longer applies).
-- [ ] `docs/release-notes/v1.8.5.md` written, covering default-transport flip + USP framing + bug #9 leak fix coordinated with manager v0.15.0.
-- [ ] Bundle-Version + pom versions bumped `1.8.0.qualifier` → `1.8.5.qualifier` across 4 manifests + 8 poms + product.
-- [ ] Tag `v1.8.5` pushed; CI publishes the GitHub Release as Latest.
-- [ ] No AI-attribution boilerplate anywhere.
-- [ ] Memory updated: `project_sprint_state.md` → "fork Sprint 14a closed, v1.8.5 shipped; HTTP/SSE is default; manager Sprint 15 ships coupled v0.15.0 with bug #9 end-to-end closure".
+- [x] Default `java -jar ... -data <ws>` launches an HTTP server. `curl` round-trip works with Bearer auth.
+- [x] `-transport stdio` opts back to stdio (regression-tested via the full reactor).
+- [x] READY line + token contract honored (`readyLineEmittedToStdout` + `tokenNotInStdoutBeyondReadyLine` GREEN).
+- [x] SSE channel infrastructure (heartbeat + sendEvent broadcast API) ships; tool-output emitter wiring deferred to v1.8.6 (called out in release notes).
+- [x] Bearer auth gates non-authorized requests with 401.
+- [~] End-to-end smoke: automated curl battery against the assembled product jar PASSED (6a). Claude Desktop / Cursor real-client smoke deferred to user (no IDE driver from this side).
+- [~] Sandboxed-agent reproduction: Stage 0 web check reframed this to "Antigravity orphan-survival" (nsjail does not structurally block fork+exec; the real Antigravity bug is per-conversation MCP-child orphaning, [discuss.ai.google.dev #139866](https://discuss.ai.google.dev/t/bug-all-mcp-server-processes-are-orphaned-after-conversation-ends-accumulate-indefinitely-causing-system-memory-exhaustion/139866)). Resident-JVM-survives-conversation-cycle smoke deferred to user with their installed Antigravity.
+- [x] `docs/release-notes/v1.8.5.md` written, covering default-transport flip + USP framing + bug #9 leak fix coordinated with manager v0.15.0.
+- [x] Bundle-Version + pom versions bumped `1.8.0.qualifier` → `1.8.5.qualifier` across 4 manifests + 8 poms + product.
+- [ ] Tag `v1.8.5` pushed; CI publishes the GitHub Release as Latest. *(Pending: user "push" approval after this Stage-7 commit lands.)*
+- [x] No AI-attribution boilerplate anywhere.
+- [ ] Memory updated: `project_sprint_state.md` → "fork Sprint 14a closed, v1.8.5 shipped; HTTP/SSE is default; manager Sprint 15 ships coupled v0.15.0 with bug #9 end-to-end closure". *(Updated at Stage 13 once both repos ship; partial update after this commit notes 14a closure.)*

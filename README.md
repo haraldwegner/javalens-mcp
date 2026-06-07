@@ -179,18 +179,44 @@ The manager handles the rest.
 
 ### Direct MCP client config (without the manager)
 
-Download a `javalens.zip` / `javalens.tar.gz` from [Releases](https://github.com/hw1964/javalens-mcp/releases) and add to your MCP config:
+Download a `javalens.zip` / `javalens.tar.gz` from [Releases](https://github.com/haraldwegner/javalens-mcp/releases). Two transport options as of **v1.8.5**:
+
+**HTTP/SSE (default since v1.8.5, recommended)** — one resident JVM serves N MCP clients. Launch the server once and point MCP-client configs at the URL it prints:
+
+```bash
+java -jar /path/to/javalens/javalens.jar -data /path/to/javalens-workspaces \
+     -port 8765 -token <your-bearer-token>
+# Server prints: READY url=http://127.0.0.1:8765 token=<your-bearer-token>
+```
+
+```json
+{
+  "mcpServers": {
+    "javalens": {
+      "url": "http://127.0.0.1:8765",
+      "headers": { "Authorization": "Bearer <your-bearer-token>" }
+    }
+  }
+}
+```
+
+Multi-client benefit: when 3 Claude windows + Cursor connect to the same URL, they share one fork JVM (~2 GB) instead of each spawning their own private stdio child (which was ~7 × 2 GB = 14 GB+ at v1.8.0).
+
+**Stdio (opt-in fallback for users pinned to v1.8.0 behaviour)** — add `-transport stdio` to the args:
 
 ```json
 {
   "mcpServers": {
     "javalens": {
       "command": "java",
-      "args": ["-jar", "/path/to/javalens/javalens.jar", "-data", "/path/to/javalens-workspaces"]
+      "args": ["-jar", "/path/to/javalens/javalens.jar", "-transport", "stdio",
+               "-data", "/path/to/javalens-workspaces"]
     }
   }
 }
 ```
+
+Both transports expose the same 75 tools through the same JSON-RPC handler — only the wire differs.
 
 Drop a `workspace.json` into `/path/to/javalens-workspaces/` to load projects:
 
@@ -206,7 +232,7 @@ The watcher loads them on startup and reconciles edits live. For single-project 
 
 ---
 
-## Tools (75 in v1.8.0)
+## Tools (75 in v1.8.5)
 
 ### Workspace administration (5)
 
