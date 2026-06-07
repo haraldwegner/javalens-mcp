@@ -13,7 +13,8 @@ Export-Package: org.javalens.mcp,
  org.javalens.mcp.tools.build,
  org.javalens.mcp.tools.codegen,
  org.javalens.mcp.tools.shared,
- org.javalens.mcp.tools.workflow
+ org.javalens.mcp.tools.workflow,
+ org.javalens.mcp.transport
 Require-Bundle: org.eclipse.equinox.app,
  org.eclipse.jdt.core.manipulation,
  org.eclipse.jdt.junit.core,

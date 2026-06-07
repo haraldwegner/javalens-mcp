@@ -85,11 +85,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.javalens.core.JdtServiceImpl;
+import org.javalens.mcp.transport.StdioTransport;
+import org.javalens.mcp.transport.Transport;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
@@ -446,21 +444,18 @@ public class JavaLensApplication implements IApplication {
     }
 
     private void runMessageLoop() {
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(System.in, StandardCharsets.UTF_8));
-             PrintWriter writer = new PrintWriter(System.out, true, StandardCharsets.UTF_8)) {
-
+        // Sprint 14a Stage 1: the stdio loop now goes through the Transport
+        // seam. Behaviour is preserved exactly (UTF-8, blank-line skipping,
+        // auto-flush on write). Stage 3 introduces HttpTransport behind the
+        // same interface; the loop here doesn't change.
+        try (Transport transport = new StdioTransport(System.in, System.out)) {
             log.debug("Entering message loop");
 
             while (running) {
-                String line = reader.readLine();
+                String line = transport.readMessage();
                 if (line == null) {
                     log.debug("End of input stream, exiting");
                     break;
-                }
-
-                if (line.isBlank()) {
-                    continue;
                 }
 
                 log.debug("Received: {}", line);
@@ -468,8 +463,7 @@ public class JavaLensApplication implements IApplication {
                 try {
                     String response = protocolHandler.processMessage(line);
                     if (response != null) {
-                        writer.println(response);
-                        writer.flush();
+                        transport.writeMessage(response);
                         log.debug("Sent: {}", response);
                     }
                 } catch (Exception e) {
