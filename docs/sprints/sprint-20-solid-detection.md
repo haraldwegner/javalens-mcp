@@ -1,12 +1,20 @@
-# Fork Sprint 19 (SCAFFOLD) — SOLID violation detection
+# Fork Sprint 20 — SOLID violation detection
 
-**Status:** scaffold only. Theme + summary + candidate items. Not an actionable plan yet.
+> **Status: re-sequenced 2026-06-07.** Originally drafted as Sprint 19 (SCAFFOLD). Renumbered to **Sprint 20** when the GOJA rebrand claimed Sprint 16 and the post-rebrand content sprints shifted by one.
+>
+> **Target version: goja-mcp v1.4**.
+>
+> **Predecessor:** [`sprint-19-kerievsky-refactoring-to-patterns.md`](sprint-19-kerievsky-refactoring-to-patterns.md) → goja-mcp v1.3.
+>
+> After Sprint 20 the v1.x line is in a position to consolidate via the eventual target-form catalog framework ([`sprint-future-target-form-catalogs.md`](sprint-future-target-form-catalogs.md)) and eventually push to **goja-mcp v2.0** (which would also pick up the networked-service vision and/or RL execution work).
+
+**Scaffold-level scope below; promote to actionable plan when Sprint 19 enters its cutover window.**
 
 ## Theme
 
 Detection for the five SOLID principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion). LSP/ISP/DIP are mechanically computable from JDT bindings; SRP and OCP need git-history correlation but the shell-out is small.
 
-Overlaps with Sprint 15's Fowler smells — SOLID violations are a subset of Fowler smells dressed differently. Ship after Sprint 15 to ride on its smell-detection infrastructure.
+Overlaps with Sprint 17's Fowler smells — SOLID violations are a subset of Fowler smells dressed differently. Ship after Sprint 17 to ride on its smell-detection infrastructure.
 
 ## Candidate items
 

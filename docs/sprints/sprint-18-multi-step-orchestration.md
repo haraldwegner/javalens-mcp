@@ -1,12 +1,20 @@
-# Fork Sprint 17 (SCAFFOLD) — Multi-step refactoring orchestration
+# Fork Sprint 18 — Multi-step refactoring orchestration
 
-**Status:** scaffold only. Theme + summary + candidate items. Not an actionable plan yet.
+> **Status: re-sequenced 2026-06-07.** Originally drafted as Sprint 17 (SCAFFOLD). Renumbered to **Sprint 18** when the GOJA rebrand claimed the Sprint 16 slot and Fowler smell detection moved to Sprint 17.
+>
+> **Target version: goja-mcp v1.2** (multi-step orchestration framework — the substrate that lets Fowler smells from Sprint 17 dispatch into proper refactoring sequences). Builds on the apply-policy retrofit from Sprint 14b (v1.9.0) and the parametric tool consolidation from Sprint 16 (goja-mcp v1.0).
+>
+> **Predecessor:** [`sprint-17-fowler-smell-detection.md`](sprint-17-fowler-smell-detection.md) → goja-mcp v1.1.
+>
+> **Successor:** [`sprint-19-kerievsky-refactoring-to-patterns.md`](sprint-19-kerievsky-refactoring-to-patterns.md) → goja-mcp v1.3 (pattern-targeted refactorings as multi-step sequences that REQUIRE this sprint's orchestration framework).
+
+**Scaffold-level scope below; promote to actionable plan when Sprint 17 enters its cutover window.**
 
 ## Theme
 
 The framework gate for complex refactorings. Fowler's primitives are individually compileable but most interesting moves (Replace Conditional with Strategy, Move Accumulation to Visitor, Modernise All Switches in a Module) are a *sequence* of primitives with checkpoint-validation between steps. Today the agent micromanages step-by-step; an orchestrated framework lets a single tool call drive the full sequence with rollback on failure.
 
-This sprint is **framework infrastructure**, not domain tools. Sprint 18 (Kerievsky), Sprint 19 (SOLID), Sprint 16 (modernisation batch-apply) all benefit when this lands.
+This sprint is **framework infrastructure**, not domain tools. Sprint 19 (Kerievsky), Sprint 20 (SOLID), Sprint 15 (modernisation batch-apply, already shipped at v1.10.0) all benefit when this lands.
 
 ## Candidate items
 

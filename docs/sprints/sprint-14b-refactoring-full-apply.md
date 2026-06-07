@@ -1,14 +1,24 @@
-# Sprint 14a — Refactoring auto-apply + undo (post-v1.8.0)
+# Sprint 14b — Refactoring auto-apply + undo + upstream pzalutski v1.3.5 sync
 
-**Status:** **Next sprint after v1.8.0.** Scaffold + scope + policy; expand to actionable-plan structure when v1.8.0 enters its cutover window.
+> **Status: re-sequenced 2026-06-07.** Originally drafted as Sprint 14a. Re-sequenced to **Sprint 14b** after Sprint 14a was reassigned to HTTP/SSE transport (the architectural fix for manager bug #9's 30 GB JVM leak + the EXECSIM sandbox unblock + multi-client lock contention). This sprint absorbed the **upstream pzalutski v1.3.5 parity-audit sync** (previously [`sprint-future-upstream-parity-audit.md`](sprint-future-upstream-parity-audit.md), originally scoped as Sprint 15 Phase 0) into its scope — porting the upstream parity diff is small enough to bundle with the apply-policy retrofit.
+>
+> **Target version: javalens-mcp v1.9.0** (minor bump because every refactor tool's return shape changes — `{ filesModified, diff, undoChangeId }` instead of text-edit descriptions — that's a contract break).
+>
+> **Predecessor:** [`sprint-14a-http-sse-transport.md`](sprint-14a-http-sse-transport.md) → v1.8.5.
+>
+> **Successor:** [`sprint-15-modernisation-sweeps.md`](sprint-15-modernisation-sweeps.md) → v1.10.0.
 
-**Target version:** **v1.9.0** (or v1.8.1 if the user prefers semver-patch framing — v1.9.0 recommended because every refactor tool gains a new contract).
+**Estimated duration:** ~12-13 days (~9 days apply-policy retrofit + ~1-2 days for the `replace_duplicates` companion workflow + ~1-2 days for the upstream parity audit and cherry-picks).
 
-**Estimated duration:** ~10-11 days (~9 days plumbing + ~1-2 days for the `replace_duplicates` companion workflow).
-
-**Surfaced 2026-06-04** during fork Sprint 14 planning ("How can we make it perform the full refactoring?"). **Promoted to Sprint 14a 2026-06-04** after the build-vs-wrap analysis confirmed JDT-LTK has the apply + undo engine already and we only need an orchestration layer.
+**Surfaced 2026-06-04** during fork Sprint 14 planning ("How can we make it perform the full refactoring?"). **Promoted to Sprint 14a then re-sequenced to Sprint 14b on 2026-06-07** after HTTP/SSE transport claimed the 14a slot.
 
 **Policy attached:** every refactoring tool added to the fork from this sprint onward MUST ship with the apply path. See "Refactoring tool contract" section below — this becomes a durable PR-review gate.
+
+## Phase 0 — Upstream pzalutski v1.3.5 parity sync (folded in 2026-06-07)
+
+Originally [`sprint-future-upstream-parity-audit.md`](sprint-future-upstream-parity-audit.md), targeting upstream v1.3.5 (May 26 2026, 63 tools). The audit + porting list is ~1-2 days; cheap cherry-picks fold into this sprint. Bigger items (Bazel detection rework, annotation-processor source-root handling) defer to a later sprint if they surface.
+
+**Outcome:** porting list document + any cheap cherry-picks (small fixes, schema improvements) landed in v1.9.0. **No coupling between upstream-audit outcome and the apply-policy retrofit** — both proceed independently within the sprint.
 
 ## Scope: what counts as a refactor tool
 

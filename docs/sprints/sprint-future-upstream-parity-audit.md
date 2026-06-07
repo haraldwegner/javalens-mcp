@@ -1,10 +1,10 @@
-# Fork Sprint (SCAFFOLD) — Upstream-parity audit (vs pzalutski-pixel/javalens-mcp v1.3.5)
+# Fork Sprint (SCAFFOLD — FOLDED) — Upstream-parity audit (vs pzalutski-pixel/javalens-mcp v1.3.5)
 
-**Status:** scaffold only. Theme + summary + candidate items. Not an actionable plan yet.
+> **Status: FOLDED into Sprint 14b on 2026-06-07.** This was originally planned as Phase 0 of Sprint 15 (Fowler smell detection). After the 2026-06-07 fork-roadmap reordering (HTTP/SSE promoted to Sprint 14a, full-apply policy retrofit re-sequenced to Sprint 14b, Modernisation pulled forward to Sprint 15, Fowler pushed to Sprint 17 under the GOJA brand), the upstream-parity audit moved to **[`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md) → v1.9.0** as its Phase 0. This file is retained as a reference document for the audit's scope and findings checklist.
 
 **Surfaced 2026-06-04** in fork Sprint 14 planning: upstream `pzalutski-pixel/javalens-mcp` moved from v1.2.0 (April) to **v1.3.5** (May 26), 63 tools. We want to confirm we haven't drifted past anything they shipped that would help us.
 
-**Sprint placement decided 2026-06-04**: **runs as Phase 0 of Sprint 15** alongside Fowler smell detection (see [`sprint-15-fowler-smell-detection.md`](sprint-15-fowler-smell-detection.md)). The audit + porting-list step is 1-2 days; cheap cherry-picks fold into Sprint 15; bigger items (Bazel rework, annotation-processor handling) defer to Sprint 16. Smell detection is the sprint's main work and is independent of audit outcome.
+**Sprint placement (post-folding):** Phase 0 of [`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md). The audit + porting-list step is 1-2 days; cheap cherry-picks fold into Sprint 14b's v1.9.0; bigger items (Bazel rework, annotation-processor handling) defer to a later sprint if they surface. The apply-policy retrofit is the sprint's main work and is independent of audit outcome.
 
 ## Theme
 

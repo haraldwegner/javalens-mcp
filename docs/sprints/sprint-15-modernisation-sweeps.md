@@ -1,6 +1,16 @@
-# Fork Sprint 16 (SCAFFOLD) — Modernisation sweeps
+# Fork Sprint 15 — Modernisation sweeps
 
-**Status:** scaffold only. Theme + summary + candidate items. Not an actionable plan yet.
+> **Status: re-sequenced 2026-06-07.** Originally drafted as Sprint 16 (SCAFFOLD). Pulled forward to **Sprint 15** when the fork roadmap reordered to ship Modernisation (Java language catch-up: lambdas, records, sealed, pattern-matching) before Fowler smell detection — modernisation tools are smaller scope (~6 tools) and ship as a tighter release.
+>
+> **Target version: javalens-mcp v1.10.0** (minor bump for the 6 new tools).
+>
+> **Predecessor:** [`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md) → v1.9.0 (refactor-apply policy + upstream parity sync).
+>
+> **Successor:** [`sprint-16-goja-rebrand.md`](sprint-16-goja-rebrand.md) → **goja-mcp v1.0** (the brand cutover sprint + service consolidation for the Antigravity tool cap). **v1.10.0 is the FINAL javalens-mcp release**; goja-mcp v1.0 launches the new product identity under a fresh v1.x version line.
+>
+> **Fowler smell detection** (originally Sprint 15, the largest content sprint) moves to [`sprint-17-fowler-smell-detection.md`](sprint-17-fowler-smell-detection.md) → goja-mcp v1.1 (first content release under the GOJA brand).
+
+**Scaffold-level scope below; promote to actionable plan when Sprint 14b enters its cutover window.**
 
 ## Theme
 

@@ -1,12 +1,20 @@
-# Fork Sprint 18 (SCAFFOLD) — Kerievsky "Refactoring to Patterns"
+# Fork Sprint 19 — Kerievsky "Refactoring to Patterns"
 
-**Status:** scaffold only. Theme + summary + candidate items. Not an actionable plan yet.
+> **Status: re-sequenced 2026-06-07.** Originally drafted as Sprint 18 (SCAFFOLD). Renumbered to **Sprint 19** when the GOJA rebrand claimed Sprint 16 and the post-rebrand content sprints shifted by one.
+>
+> **Target version: goja-mcp v1.3** (pattern-targeted refactorings).
+>
+> **Predecessor:** [`sprint-18-multi-step-orchestration.md`](sprint-18-multi-step-orchestration.md) → goja-mcp v1.2 (the orchestration framework this sprint REQUIRES).
+>
+> **Successor:** [`sprint-20-solid-detection.md`](sprint-20-solid-detection.md) → goja-mcp v1.4.
+
+**Scaffold-level scope below; promote to actionable plan when Sprint 18 enters its cutover window.**
 
 ## Theme
 
 Joshua Kerievsky's *Refactoring to Patterns* (2004) is the bridge between Fowler's small-step refactorings and GoF's design patterns. Each transformation is a sequence of Fowler primitives whose target is a named pattern instantiation. The catalogue runs **both directions** — *toward* patterns when complexity warrants, *away from* patterns when they've outlived their usefulness (Inline Singleton, Replace Pattern with Idiom).
 
-This sprint ships pattern-targeted refactorings as compositions of existing primitives. **Requires Sprint 17's orchestration framework** to land first.
+This sprint ships pattern-targeted refactorings as compositions of existing primitives. **Requires Sprint 18's orchestration framework** to land first.
 
 ## Candidate items (representative slice — ~8 transformations)
 

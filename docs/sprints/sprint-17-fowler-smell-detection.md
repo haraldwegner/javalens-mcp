@@ -1,6 +1,16 @@
-# Fork Sprint 15 (SCAFFOLD) — Fowler smell detection
+# Fork Sprint 17 — Fowler smell detection
 
-**Status:** scaffold only. Theme + summary + candidate items. Not an actionable plan yet.
+> **Status: re-sequenced 2026-06-07 (twice).** Originally drafted as Sprint 15 (SCAFFOLD). First push-back to Sprint 16 (after Modernisation pulled forward). Then push-back to **Sprint 17** — Fowler smell detection is the **first big content release under the GOJA brand**. The Sprint 16 slot is the GOJA rebrand sprint ([`sprint-16-goja-rebrand.md`](sprint-16-goja-rebrand.md)) which closes the javalens-mcp brand at v1.10.0 and resets the version line to **goja-mcp v1.0**.
+>
+> **Target version: goja-mcp v1.1** (first content release after the brand reset). The 18 detection tools land under the parametric `find_target_candidates(catalog="fowler_smell", kind="...")` shape consolidated in Sprint 16 — adding 18 new `kind` values rather than 18 new top-level tools, preserving Antigravity tool-cap headroom for subsequent sprints (Kerievsky, SOLID).
+>
+> **Predecessor:** [`sprint-16-goja-rebrand.md`](sprint-16-goja-rebrand.md) → goja-mcp v1.0.
+>
+> **Successor:** [`sprint-18-multi-step-orchestration.md`](sprint-18-multi-step-orchestration.md) → goja-mcp v1.2 (the orchestration framework that lets the 18 smells dispatch into multi-step refactoring sequences).
+
+**Note on the upstream-parity audit:** the Phase 0 audit originally bundled into this sprint (clone upstream `pzalutski-pixel/javalens-mcp` v1.3.5, diff + porting list) moved to [`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md) when the fork roadmap reordered. Sprint 17 ships pure Fowler smell-detection work.
+
+**Scaffold-level scope below; promote to actionable plan when Sprint 16 (GOJA rebrand) enters its cutover window.**
 
 ## Theme
 
