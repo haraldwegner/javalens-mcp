@@ -104,4 +104,66 @@ class StdioTransportTest {
                 "expected UTF-8 content preserved: " + received);
         }
     }
+
+    // ===== Stage 3: run() drives the loop internally =====
+
+    @Test
+    @DisplayName("run() dispatches each non-blank input line via the handler")
+    void run_dispatchesEachInputLine() throws Exception {
+        String input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"a\"}\n"
+                     + "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"b\"}\n"
+                     + "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"c\"}\n";
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        try (StdioTransport transport = new StdioTransport(
+                new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)), out)) {
+            transport.run(msg -> "{\"jsonrpc\":\"2.0\",\"result\":\"ok\"}");
+        }
+
+        String written = out.toString(StandardCharsets.UTF_8);
+        long lines = written.lines().filter(s -> !s.isBlank()).count();
+        assertEquals(3, lines,
+            "expected 3 response lines for 3 inbound messages, got: " + written);
+    }
+
+    @Test
+    @DisplayName("run() skips writing when handler returns null (notification semantics)")
+    void run_skipsNullHandlerResults() throws Exception {
+        String input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}\n";
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        try (StdioTransport transport = new StdioTransport(
+                new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)), out)) {
+            transport.run(msg -> null);
+        }
+
+        assertTrue(out.toString(StandardCharsets.UTF_8).isEmpty(),
+            "no response should be written for null handler result");
+    }
+
+    @Test
+    @DisplayName("run() survives handler exceptions and continues to next message")
+    void run_survivesHandlerException() throws Exception {
+        // First message throws, second succeeds. Both lines should be read;
+        // only the second produces output.
+        String input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"bad\"}\n"
+                     + "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"good\"}\n";
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        try (StdioTransport transport = new StdioTransport(
+                new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)), out)) {
+            transport.run(msg -> {
+                if (msg.contains("\"bad\"")) {
+                    throw new RuntimeException("simulated dispatch failure");
+                }
+                return "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":\"ok\"}";
+            });
+        }
+
+        String written = out.toString(StandardCharsets.UTF_8);
+        assertTrue(written.contains("\"id\":2"),
+            "second message should still get a response: " + written);
+        long lines = written.lines().filter(s -> !s.isBlank()).count();
+        assertEquals(1, lines, "only the surviving handler should produce output: " + written);
+    }
 }

@@ -1,33 +1,39 @@
 package org.javalens.mcp.transport;
 
-import java.io.IOException;
-
 /**
- * Transport seam between the MCP server's message loop and the underlying
- * I/O channel. Stdio (line-delimited over System.in/out) and HTTP (per-request
- * via servlet) both implement this interface.
+ * Transport seam between the MCP server's main message loop and the
+ * underlying I/O channel.
  *
- * <p>Sprint 14a: introduced to open the seam for the HTTP/SSE transport
- * landing in v1.8.5. The stdio loop in {@code JavaLensApplication} previously
- * inlined the BufferedReader/PrintWriter wiring; this interface lets that
- * loop work against either transport without conditional branching.
+ * <p>Sprint 14a Stage 1 introduced the seam with a read/write pair for
+ * stdio; Stage 3 generalizes to a {@link #run} model so the HTTP transport
+ * (which is per-request via servlet thread, not a continuous stream) fits
+ * cleanly. Stdio implements {@code run} as a loop over its internal
+ * read/write; HTTP runs the listener until {@link #close} is signalled.
  */
 public interface Transport extends AutoCloseable {
 
     /**
-     * Block until the next inbound JSON-RPC message is available, then
-     * return it as a single line. Blank lines are skipped. Returns
-     * {@code null} when the input stream is closed / EOF reached.
+     * Drive the transport's I/O until the channel is exhausted or
+     * {@link #close} is called. For each inbound JSON-RPC message,
+     * dispatch via {@code handler} and emit the returned response (if
+     * non-{@code null}).
      */
-    String readMessage() throws IOException;
+    void run(MessageHandler handler) throws Exception;
 
     /**
-     * Send a JSON-RPC response to the client. Implementations MUST flush
-     * before returning so the message is visible to the peer immediately
-     * (no buffering between the protocol handler and the wire).
+     * Stop the transport. Idempotent. May be called from another thread to
+     * unblock a currently-running {@link #run}.
      */
-    void writeMessage(String message) throws IOException;
-
     @Override
     void close();
+
+    /**
+     * Handler interface bound by the application to its
+     * {@code McpProtocolHandler::processMessage}. Returns {@code null} for
+     * JSON-RPC notifications (no response expected).
+     */
+    @FunctionalInterface
+    interface MessageHandler {
+        String handle(String message);
+    }
 }

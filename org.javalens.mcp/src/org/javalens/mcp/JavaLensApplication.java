@@ -106,13 +106,13 @@ public class JavaLensApplication implements IApplication {
 
     private static final Logger log = LoggerFactory.getLogger(JavaLensApplication.class);
 
-    private volatile boolean running = true;
     private volatile IJdtService jdtService;
     private volatile ProjectLoadingState loadingState = ProjectLoadingState.NOT_LOADED;
     private volatile String loadingError = null;
     private ToolRegistry toolRegistry;
     private McpProtocolHandler protocolHandler;
     private volatile WorkspaceFileWatcher workspaceWatcher;
+    private volatile Transport activeTransport;
 
     // Static instance for loading state access by tools
     private static volatile JavaLensApplication instance;
@@ -455,33 +455,18 @@ public class JavaLensApplication implements IApplication {
     }
 
     private void runMessageLoop(TransportConfig config) {
-        // Sprint 14a Stage 1+2: the loop goes through the Transport seam.
-        // Behaviour is preserved exactly for stdio; HTTP is selected via
-        // -transport flag (default) and stubbed until Stage 3.
+        // Sprint 14a Stage 3: transport.run(handler) drives the I/O loop
+        // internally. Stdio loops on its read/write pair; HTTP runs the
+        // JDK HttpServer until close() signals shutdown. activeTransport
+        // exposes the running transport so JavaLensApplication.stop() can
+        // unblock it on OSGi shutdown.
         try (Transport transport = openTransport(config)) {
-            log.debug("Entering message loop");
-
-            while (running) {
-                String line = transport.readMessage();
-                if (line == null) {
-                    log.debug("End of input stream, exiting");
-                    break;
-                }
-
-                log.debug("Received: {}", line);
-
-                try {
-                    String response = protocolHandler.processMessage(line);
-                    if (response != null) {
-                        transport.writeMessage(response);
-                        log.debug("Sent: {}", response);
-                    }
-                } catch (Exception e) {
-                    log.error("Error processing message", e);
-                }
-            }
+            this.activeTransport = transport;
+            transport.run(protocolHandler::processMessage);
         } catch (Exception e) {
             log.error("Error in message loop", e);
+        } finally {
+            this.activeTransport = null;
         }
     }
 
@@ -507,7 +492,10 @@ public class JavaLensApplication implements IApplication {
     @Override
     public void stop() {
         log.info("Stop requested");
-        running = false;
+        Transport t = activeTransport;
+        if (t != null) {
+            t.close();
+        }
         WorkspaceFileWatcher watcher = workspaceWatcher;
         if (watcher != null) {
             watcher.close();
