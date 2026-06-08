@@ -133,9 +133,30 @@ public class McpProtocolHandler {
     }
 
     /**
+     * MCP protocol versions this server is compatible with. We respond
+     * with the client's requested version when it's in this set, falling
+     * back to the latest entry otherwise. The basic JSON-RPC / tools
+     * surface is identical across these versions; we just need to
+     * negotiate a value the client will accept.
+     *
+     * <p>v1.8.6 (Sprint 14a hotfix): pre-v1.8.6 the server always
+     * responded with the obsolete "2024-11-05" value, so clients that
+     * required a newer spec (Claude Code v2.1.x and similar) disconnected
+     * after initialize. Per the MCP spec, the server MUST respond with a
+     * version the client supports or the client SHOULD disconnect.
+     */
+    static final String LATEST_PROTOCOL_VERSION = "2025-06-18";
+    static final java.util.Set<String> SUPPORTED_PROTOCOL_VERSIONS = java.util.Set.of(
+        "2024-11-05",
+        "2025-03-26",
+        "2025-06-18"
+    );
+
+    /**
      * Handle initialize request - MCP handshake.
      */
     private Object handleInitialize(JsonNode params) {
+        String requestedVersion = null;
         if (params != null) {
             JsonNode clientInfo = params.get("clientInfo");
             if (clientInfo != null) {
@@ -143,14 +164,30 @@ public class McpProtocolHandler {
                 clientVersion = clientInfo.has("version") ? clientInfo.get("version").asText() : "unknown";
                 log.info("Client connected: {} v{}", clientName, clientVersion);
             }
+            JsonNode versionNode = params.get("protocolVersion");
+            if (versionNode != null && versionNode.isTextual()) {
+                requestedVersion = versionNode.asText();
+            }
         }
 
         initialized = true;
 
         Map<String, Object> result = new LinkedHashMap<>();
 
-        // Protocol version
-        result.put("protocolVersion", "2024-11-05");
+        // Protocol-version negotiation: echo the client's requested
+        // version when it's in our supported set; otherwise return our
+        // latest. Pre-v1.8.6 this was hardcoded to "2024-11-05" and the
+        // result was that clients targeting newer specs (Claude Code et
+        // al.) hung up after initialize.
+        String negotiated;
+        if (requestedVersion != null && SUPPORTED_PROTOCOL_VERSIONS.contains(requestedVersion)) {
+            negotiated = requestedVersion;
+        } else {
+            negotiated = LATEST_PROTOCOL_VERSION;
+        }
+        log.info("Protocol version: client requested {}, negotiated {}",
+            requestedVersion == null ? "<none>" : requestedVersion, negotiated);
+        result.put("protocolVersion", negotiated);
 
         // Server info
         Map<String, Object> serverInfo = new LinkedHashMap<>();

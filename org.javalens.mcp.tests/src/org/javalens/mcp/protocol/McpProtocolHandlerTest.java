@@ -94,6 +94,50 @@ class McpProtocolHandlerTest {
     }
 
     @Test
+    @DisplayName("initialize echoes the client's requested protocolVersion when supported")
+    void initialize_echoesRequestedProtocolVersion_whenSupported() throws Exception {
+        String request = """
+            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"claude-code","version":"2.1.168"}}}
+            """;
+
+        String response = handler.processMessage(request);
+
+        JsonNode json = objectMapper.readTree(response);
+        assertEquals("2025-06-18",
+            json.get("result").get("protocolVersion").asText(),
+            "server must echo the client's requested version when in supported set");
+    }
+
+    @Test
+    @DisplayName("initialize falls back to latest protocolVersion when requested is unknown")
+    void initialize_fallsBackToLatest_whenRequestedUnknown() throws Exception {
+        String request = """
+            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}
+            """;
+
+        String response = handler.processMessage(request);
+
+        JsonNode json = objectMapper.readTree(response);
+        assertEquals(McpProtocolHandler.LATEST_PROTOCOL_VERSION,
+            json.get("result").get("protocolVersion").asText(),
+            "unsupported requested version must fall back to LATEST_PROTOCOL_VERSION");
+    }
+
+    @Test
+    @DisplayName("initialize falls back to latest when params omit protocolVersion")
+    void initialize_fallsBackToLatest_whenAbsent() throws Exception {
+        String request = """
+            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+            """;
+
+        String response = handler.processMessage(request);
+
+        JsonNode json = objectMapper.readTree(response);
+        assertEquals(McpProtocolHandler.LATEST_PROTOCOL_VERSION,
+            json.get("result").get("protocolVersion").asText());
+    }
+
+    @Test
     @DisplayName("initialize should set initialized flag")
     void initialize_setsInitializedFlag() {
         assertFalse(handler.isInitialized());
