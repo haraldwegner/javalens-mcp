@@ -7,6 +7,27 @@ For each entry include: ID, date observed, severity, reproducer, expected vs act
 
 ---
 
+## #14 — `health_check` reports a hardcoded `version: "2.0.0-SNAPSHOT"`
+
+- **Status:** OPEN (targeted: v1.10.0 — one-liner: reuse `McpProtocolHandler.serverVersion()`)
+- **Date observed:** 2026-06-11, first live `health_check` against the freshly released v1.9.0 residents.
+- **Reporter:** Harald's session (live acceptance after Reload All).
+- **Severity:** LOW — cosmetic, but it misreports the running version to every client and agent.
+
+### Expected
+
+`health_check.data.version` reports the real bundle version (`1.9.0.<qualifier>`), same as the `initialize` handshake since the v1.9.0 cherry-pick.
+
+### Actual
+
+`HealthCheckTool.java:97` carries its OWN hardcoded `status.put("version", "2.0.0-SNAPSHOT")` — the v1.9.0 fix covered only `McpProtocolHandler`'s `serverInfo`. The A6 smoke asserted the handshake, not health_check.
+
+### Fix
+
+Replace the literal with `McpProtocolHandler.serverVersion()` (already package-reachable) and extend the health-check test to pin it.
+
+---
+
 ## #13 — `rename_symbol` misses constructor declarations when renaming a type
 
 - **Status:** FIXED in v1.8.0
