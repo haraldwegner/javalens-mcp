@@ -5,7 +5,11 @@ import org.eclipse.equinox.app.IApplicationContext;
 import org.javalens.mcp.protocol.McpProtocolHandler;
 import org.javalens.core.IJdtService;
 import org.javalens.core.workspace.WorkspaceFileWatcher;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.tools.AddProjectTool;
+import org.javalens.mcp.tools.ApplyRefactoringTool;
+import org.javalens.mcp.tools.InspectRefactoringTool;
+import org.javalens.mcp.tools.UndoRefactoringTool;
 import org.javalens.mcp.tools.HealthCheckTool;
 import org.javalens.mcp.tools.ListProjectsTool;
 import org.javalens.mcp.tools.LoadProjectTool;
@@ -109,6 +113,9 @@ public class JavaLensApplication implements IApplication {
     private volatile IJdtService jdtService;
     private volatile ProjectLoadingState loadingState = ProjectLoadingState.NOT_LOADED;
     private volatile String loadingError = null;
+    // Sprint 14b: session-scoped cache backing the refactoring apply/undo
+    // contract (staged Changes + undo handles, TTL + LRU bounded).
+    private final RefactoringChangeCache refactoringChangeCache = new RefactoringChangeCache();
     private ToolRegistry toolRegistry;
     private McpProtocolHandler protocolHandler;
     private volatile WorkspaceFileWatcher workspaceWatcher;
@@ -452,6 +459,12 @@ public class JavaLensApplication implements IApplication {
         // FindLargeClasses / FindNamingViolations / FindUnusedCode /
         // FindPossibleBugs registrations dropped — exposed via
         // find_quality_issue(kind=...) above.
+
+        // Sprint 14b: refactoring apply/undo primitives. Staged changes and
+        // undo handles live in refactoringChangeCache (1 h TTL, LRU-capped).
+        toolRegistry.register(new ApplyRefactoringTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new UndoRefactoringTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new InspectRefactoringTool(() -> jdtService, refactoringChangeCache));
     }
 
     private void runMessageLoop(TransportConfig config) {

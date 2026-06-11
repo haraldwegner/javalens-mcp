@@ -9,6 +9,7 @@ Bundle-ActivationPolicy: lazy
 Export-Package: org.javalens.mcp,
  org.javalens.mcp.models,
  org.javalens.mcp.protocol,
+ org.javalens.mcp.refactoring,
  org.javalens.mcp.tools,
  org.javalens.mcp.tools.build,
  org.javalens.mcp.tools.codegen,
