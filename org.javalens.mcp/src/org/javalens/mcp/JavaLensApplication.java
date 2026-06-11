@@ -9,6 +9,7 @@ import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.tools.AddProjectTool;
 import org.javalens.mcp.tools.ApplyRefactoringTool;
 import org.javalens.mcp.tools.InspectRefactoringTool;
+import org.javalens.mcp.tools.ReplaceDuplicatesTool;
 import org.javalens.mcp.tools.UndoRefactoringTool;
 import org.javalens.mcp.tools.HealthCheckTool;
 import org.javalens.mcp.tools.ListProjectsTool;
@@ -465,6 +466,8 @@ public class JavaLensApplication implements IApplication {
         toolRegistry.register(new ApplyRefactoringTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new UndoRefactoringTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new InspectRefactoringTool(() -> jdtService, refactoringChangeCache));
+        // Sprint 14b: composite closing the find_duplicate_code loop.
+        toolRegistry.register(new ReplaceDuplicatesTool(() -> jdtService, refactoringChangeCache));
     }
 
     private void runMessageLoop(TransportConfig config) {

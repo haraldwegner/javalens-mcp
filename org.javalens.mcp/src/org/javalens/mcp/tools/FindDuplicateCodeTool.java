@@ -61,6 +61,7 @@ import java.util.regex.Pattern;
  *   operation: "find_duplicate_code",
  *   groupCount: N,
  *   groups: [{
+ *     groupId,  // stable hash of the clone shape — feed to replace_duplicates
  *     instances: [{
  *       filePath, line, methodName, tokenCount, similarity, sourceProject
  *     }, …]
@@ -119,8 +120,10 @@ public class FindDuplicateCodeTool extends AbstractTool {
             - Whitespace + comments dropped
 
             Output groups contain ≥2 method instances with identical
-            normalized token sequence (similarity 1.0). Empty groups list
-            means no clones above minTokens were found.
+            normalized token sequence (similarity 1.0) plus a stable groupId
+            (hash of the clone shape) — pass it to replace_duplicates with
+            the SAME parameters to delegate same-type clones to a canonical
+            method. Empty groups list means no clones above minTokens.
             """;
     }
 
@@ -220,7 +223,8 @@ public class FindDuplicateCodeTool extends AbstractTool {
 
     private static List<Map<String, Object>> buildGroups(Map<String, List<MethodFingerprint>> pool) {
         List<Map<String, Object>> groups = new ArrayList<>();
-        for (List<MethodFingerprint> bucket : pool.values()) {
+        for (Map.Entry<String, List<MethodFingerprint>> entry : pool.entrySet()) {
+            List<MethodFingerprint> bucket = entry.getValue();
             if (bucket.size() < 2) continue;
             List<Map<String, Object>> instances = new ArrayList<>();
             for (MethodFingerprint fp : bucket) {
@@ -234,10 +238,44 @@ public class FindDuplicateCodeTool extends AbstractTool {
                 instances.add(inst);
             }
             Map<String, Object> group = new LinkedHashMap<>();
+            // Sprint 14b: deterministic id — hash of the normalized token
+            // sequence, so the same clone shape yields the same id across
+            // calls and replace_duplicates can re-resolve it statelessly.
+            group.put("groupId", groupIdOf(entry.getKey()));
             group.put("instances", instances);
             groups.add(group);
         }
         return groups;
+    }
+
+    /** Stable id for a clone shape: SHA-1 of the normalized token sequence. */
+    static String groupIdOf(String normalizedSeq) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-1");
+            byte[] hash = digest.digest(normalizedSeq.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < 6 && i < hash.length; i++) {
+                hex.append(String.format("%02x", hash[i]));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // SHA-1 is mandatory on every JRE; fall back to a plain hash.
+            return Integer.toHexString(normalizedSeq.hashCode());
+        }
+    }
+
+    /**
+     * Reusable detection core for {@code replace_duplicates}: the pool of
+     * method fingerprints keyed by normalized token sequence.
+     */
+    static Map<String, List<MethodFingerprint>> collectPool(IJdtService service,
+                                                            Collection<LoadedProject> projects,
+                                                            int minTokens) {
+        Map<String, List<MethodFingerprint>> pool = new HashMap<>();
+        for (LoadedProject lp : projects) {
+            collectFingerprints(pool, lp, service, minTokens);
+        }
+        return pool;
     }
 
     private static void collectFingerprints(Map<String, List<MethodFingerprint>> sink,
@@ -282,6 +320,7 @@ public class FindDuplicateCodeTool extends AbstractTool {
             fp.normalizedSeq = seq.toString();
             fp.tokenCount = tokenCount;
             fp.methodName = method.getElementName();
+            fp.method = method;
             fp.sourceProject = lp.projectKey();
             try {
                 java.nio.file.Path absolute = method.getResource().getLocation().toFile().toPath();
@@ -395,10 +434,12 @@ public class FindDuplicateCodeTool extends AbstractTool {
         return token;
     }
 
-    private static final class MethodFingerprint {
+    /** Package-visible so replace_duplicates can reuse the detection pool. */
+    static final class MethodFingerprint {
         String normalizedSeq;
         int tokenCount;
         String methodName;
+        IMethod method;
         String filePath;
         int line;
         String sourceProject;
