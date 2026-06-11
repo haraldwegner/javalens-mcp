@@ -5,83 +5,90 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.javalens.core.JdtServiceImpl;
 import org.javalens.mcp.fixtures.TestProjectHelper;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.tools.ExtractConstantTool;
+import org.javalens.mcp.tools.UndoRefactoringTool;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration tests for ExtractConstantTool.
- * Tests expression extraction to static final constant.
+ * Integration tests for ExtractConstantTool under the Sprint 14b auto-apply
+ * contract (temp fixture copy; on-disk verification; undo round-trip).
  */
 class ExtractConstantToolTest {
 
     @RegisterExtension
     TestProjectHelper helper = new TestProjectHelper();
 
+    private JdtServiceImpl service;
+    private RefactoringChangeCache cache;
     private ExtractConstantTool tool;
+    private UndoRefactoringTool undoTool;
     private ObjectMapper objectMapper;
-    private Path projectPath;
-    private String refactoringTargetPath;
+    private Path refactoringTargetFile;
 
     @BeforeEach
     void setUp() throws Exception {
-        JdtServiceImpl service = helper.loadProject("simple-maven");
-        tool = new ExtractConstantTool(() -> service);
+        service = helper.loadProjectCopy("simple-maven");
+        cache = new RefactoringChangeCache();
+        tool = new ExtractConstantTool(() -> service, cache);
+        undoTool = new UndoRefactoringTool(() -> service, cache);
         objectMapper = new ObjectMapper();
-        projectPath = helper.getFixturePath("simple-maven");
-        refactoringTargetPath = projectPath.resolve("src/main/java/com/example/RefactoringTarget.java").toString();
+        refactoringTargetFile = helper.getTempDirectory()
+            .resolve("simple-maven/src/main/java/com/example/RefactoringTarget.java");
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> getData(ToolResponse r) { return (Map<String, Object>) r.getData(); }
 
-    @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> getEdits(Map<String, Object> data) {
-        return (List<Map<String, Object>>) data.get("edits");
-    }
-
-    // ========== Comprehensive Functionality Tests ==========
-
-    @Test
-    @DisplayName("extracts expression to static final constant with complete response")
-    void extractsExpressionToConstantWithCompleteResponse() {
+    private ObjectNode extractionArgs(String constantName) {
         ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
+        args.put("filePath", refactoringTargetFile.toString());
         args.put("startLine", 35);  // "PREFIX_" string literal
         args.put("startColumn", 24);
         args.put("endLine", 35);
         args.put("endColumn", 33);
-        args.put("constantName", "DEFAULT_PREFIX");
+        if (constantName != null) {
+            args.put("constantName", constantName);
+        }
+        return args;
+    }
 
-        ToolResponse response = tool.execute(args);
+    // ========== Auto-apply contract ==========
 
-        assertTrue(response.isSuccess());
+    @Test
+    @DisplayName("extracts expression to static final constant on disk; undo restores")
+    void extractsConstant_appliesAndUndoRestores() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
+
+        ToolResponse response = tool.execute(extractionArgs("DEFAULT_PREFIX"));
+
+        assertTrue(response.isSuccess(), () -> String.valueOf(response.getError()));
         Map<String, Object> data = getData(response);
-
-        // Verify constant info
+        assertEquals(Boolean.TRUE, data.get("applied"));
         assertEquals("DEFAULT_PREFIX", data.get("constantName"));
         assertNotNull(data.get("constantType"));
+        assertNotNull(data.get("undoChangeId"));
 
-        // Verify edit structure
-        assertNotNull(data.get("edits"));
-        List<Map<String, Object>> edits = getEdits(data);
-        assertFalse(edits.isEmpty());
+        String onDisk = Files.readString(refactoringTargetFile);
+        assertTrue(onDisk.contains("static final"),
+            "constant declaration must be on disk");
+        assertTrue(onDisk.contains("DEFAULT_PREFIX ="),
+            "constant must be declared with the requested name");
+        assertNotEquals(original, onDisk);
 
-        // The declaration edit should contain static final
-        boolean hasStaticFinal = edits.stream()
-            .anyMatch(e -> {
-                String newText = (String) e.get("newText");
-                return newText != null && newText.contains("static") && newText.contains("final");
-            });
-        assertTrue(hasStaticFinal);
+        ToolResponse undone = undoTool.execute(objectMapper.createObjectNode()
+            .put("undoChangeId", (String) data.get("undoChangeId")));
+        assertTrue(undone.isSuccess(), () -> String.valueOf(undone.getError()));
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 
     // ========== Required Parameter Tests ==========
@@ -89,16 +96,7 @@ class ExtractConstantToolTest {
     @Test
     @DisplayName("requires constantName parameter")
     void requiresConstantName() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("startLine", 35);
-        args.put("startColumn", 24);
-        args.put("endLine", 35);
-        args.put("endColumn", 33);
-        // No constantName provided
-
-        ToolResponse response = tool.execute(args);
-
+        ToolResponse response = tool.execute(extractionArgs(null));
         assertFalse(response.isSuccess());
     }
 
@@ -120,26 +118,21 @@ class ExtractConstantToolTest {
     // ========== Error Handling Tests ==========
 
     @Test
-    @DisplayName("rejects invalid constant names")
-    void rejectsInvalidConstantNames() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("startLine", 35);
-        args.put("startColumn", 24);
-        args.put("endLine", 35);
-        args.put("endColumn", 33);
-        args.put("constantName", "123INVALID");
+    @DisplayName("rejects invalid constant names — without touching disk")
+    void rejectsInvalidConstantNames() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
 
-        ToolResponse response = tool.execute(args);
+        ToolResponse response = tool.execute(extractionArgs("123INVALID"));
 
         assertFalse(response.isSuccess());
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 
     @Test
     @DisplayName("handles invalid range gracefully")
     void handlesInvalidRange() {
         ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
+        args.put("filePath", refactoringTargetFile.toString());
         args.put("startLine", -1);
         args.put("startColumn", -1);
         args.put("endLine", -1);

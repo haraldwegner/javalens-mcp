@@ -378,7 +378,7 @@ public class JavaLensApplication implements IApplication {
         // Refactoring tools
         toolRegistry.register(new RenameSymbolTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new OrganizeImportsTool(() -> jdtService));
-        toolRegistry.register(new ExtractVariableTool(() -> jdtService));
+        toolRegistry.register(new ExtractVariableTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new ExtractMethodTool(() -> jdtService));
 
         // Fine-grained reference search (JDT-unique capabilities).
@@ -400,7 +400,7 @@ public class JavaLensApplication implements IApplication {
         toolRegistry.register(new GetTypeUsageSummaryTool(() -> jdtService));
 
         // Advanced refactoring tools
-        toolRegistry.register(new ExtractConstantTool(() -> jdtService));
+        toolRegistry.register(new ExtractConstantTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new InlineVariableTool(() -> jdtService));
         toolRegistry.register(new InlineMethodTool(() -> jdtService));
         toolRegistry.register(new ChangeMethodSignatureTool(() -> jdtService));

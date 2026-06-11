@@ -5,78 +5,87 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.javalens.core.JdtServiceImpl;
 import org.javalens.mcp.fixtures.TestProjectHelper;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.tools.ExtractVariableTool;
+import org.javalens.mcp.tools.UndoRefactoringTool;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration tests for ExtractVariableTool.
- * Tests expression extraction to local variable.
+ * Integration tests for ExtractVariableTool under the Sprint 14b auto-apply
+ * contract (temp fixture copy; on-disk verification; undo round-trip).
  */
 class ExtractVariableToolTest {
 
     @RegisterExtension
     TestProjectHelper helper = new TestProjectHelper();
 
+    private JdtServiceImpl service;
+    private RefactoringChangeCache cache;
     private ExtractVariableTool tool;
+    private UndoRefactoringTool undoTool;
     private ObjectMapper objectMapper;
-    private Path projectPath;
-    private String refactoringTargetPath;
+    private Path refactoringTargetFile;
 
     @BeforeEach
     void setUp() throws Exception {
-        JdtServiceImpl service = helper.loadProject("simple-maven");
-        tool = new ExtractVariableTool(() -> service);
+        service = helper.loadProjectCopy("simple-maven");
+        cache = new RefactoringChangeCache();
+        tool = new ExtractVariableTool(() -> service, cache);
+        undoTool = new UndoRefactoringTool(() -> service, cache);
         objectMapper = new ObjectMapper();
-        projectPath = helper.getFixturePath("simple-maven");
-        refactoringTargetPath = projectPath.resolve("src/main/java/com/example/RefactoringTarget.java").toString();
+        refactoringTargetFile = helper.getTempDirectory()
+            .resolve("simple-maven/src/main/java/com/example/RefactoringTarget.java");
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> getData(ToolResponse r) { return (Map<String, Object>) r.getData(); }
 
-    @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> getEdits(Map<String, Object> data) {
-        return (List<Map<String, Object>>) data.get("edits");
-    }
-
-    // ========== Comprehensive Functionality Tests ==========
-
-    @Test
-    @DisplayName("extracts expression to variable with complete response including edits")
-    void extractsExpressionWithCompleteResponse() {
+    private ObjectNode extractionArgs() {
         ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
+        args.put("filePath", refactoringTargetFile.toString());
         args.put("startLine", 31);  // input.length() * 2 + 10
         args.put("startColumn", 21);
         args.put("endLine", 31);
         args.put("endColumn", 44);
-        args.put("variableName", "calculated");
+        return args;
+    }
 
+    // ========== Auto-apply contract ==========
+
+    @Test
+    @DisplayName("extracts expression to variable on disk; undo restores the original")
+    void extractsExpression_appliesAndUndoRestores() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
+
+        ObjectNode args = extractionArgs();
+        args.put("variableName", "calculated");
         ToolResponse response = tool.execute(args);
 
-        assertTrue(response.isSuccess());
+        assertTrue(response.isSuccess(), () -> String.valueOf(response.getError()));
         Map<String, Object> data = getData(response);
-
-        // Verify variable info
+        assertEquals(Boolean.TRUE, data.get("applied"));
         assertEquals("calculated", data.get("variableName"));
         assertNotNull(data.get("variableType"));
+        assertNotNull(data.get("undoChangeId"));
 
-        // Verify edit structure
-        assertNotNull(data.get("edits"));
-        List<Map<String, Object>> edits = getEdits(data);
-        assertFalse(edits.isEmpty());
+        String onDisk = Files.readString(refactoringTargetFile);
+        assertTrue(onDisk.contains("calculated ="),
+            "declaration must be on disk:\n" + data.get("declaration"));
+        assertNotEquals(original, onDisk);
 
-        Map<String, Object> firstEdit = edits.get(0);
-        assertNotNull(firstEdit.get("newText"));
+        ToolResponse undone = undoTool.execute(objectMapper.createObjectNode()
+            .put("undoChangeId", (String) data.get("undoChangeId")));
+        assertTrue(undone.isSuccess(), () -> String.valueOf(undone.getError()));
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 
     // ========== Optional Parameter Tests ==========
@@ -84,15 +93,7 @@ class ExtractVariableToolTest {
     @Test
     @DisplayName("auto-suggests variable name when not provided")
     void autoSuggestsVariableName() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("startLine", 31);
-        args.put("startColumn", 21);
-        args.put("endLine", 31);
-        args.put("endColumn", 44);
-        // No variableName provided
-
-        ToolResponse response = tool.execute(args);
+        ToolResponse response = tool.execute(extractionArgs());
 
         assertTrue(response.isSuccess());
         Map<String, Object> data = getData(response);
@@ -120,7 +121,7 @@ class ExtractVariableToolTest {
     void requiresPositionParameters() {
         // Missing start position
         ObjectNode args1 = objectMapper.createObjectNode();
-        args1.put("filePath", refactoringTargetPath);
+        args1.put("filePath", refactoringTargetFile.toString());
         args1.put("endLine", 31);
         args1.put("endColumn", 44);
 
@@ -129,7 +130,7 @@ class ExtractVariableToolTest {
 
         // Missing end position
         ObjectNode args2 = objectMapper.createObjectNode();
-        args2.put("filePath", refactoringTargetPath);
+        args2.put("filePath", refactoringTargetFile.toString());
         args2.put("startLine", 31);
         args2.put("startColumn", 21);
 
@@ -140,30 +141,19 @@ class ExtractVariableToolTest {
     // ========== Error Handling Tests ==========
 
     @Test
-    @DisplayName("rejects invalid variable names and reserved words")
-    void rejectsInvalidVariableNames() {
-        // Test invalid identifier (starts with number)
-        ObjectNode args1 = objectMapper.createObjectNode();
-        args1.put("filePath", refactoringTargetPath);
-        args1.put("startLine", 31);
-        args1.put("startColumn", 21);
-        args1.put("endLine", 31);
-        args1.put("endColumn", 44);
+    @DisplayName("rejects invalid variable names and reserved words — without touching disk")
+    void rejectsInvalidVariableNames() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
+
+        ObjectNode args1 = extractionArgs();
         args1.put("variableName", "123invalid");
+        assertFalse(tool.execute(args1).isSuccess());
 
-        ToolResponse response1 = tool.execute(args1);
-        assertFalse(response1.isSuccess());
-
-        // Test reserved word
-        ObjectNode args2 = objectMapper.createObjectNode();
-        args2.put("filePath", refactoringTargetPath);
-        args2.put("startLine", 31);
-        args2.put("startColumn", 21);
-        args2.put("endLine", 31);
-        args2.put("endColumn", 44);
+        ObjectNode args2 = extractionArgs();
         args2.put("variableName", "for");
+        assertFalse(tool.execute(args2).isSuccess());
 
-        ToolResponse response2 = tool.execute(args2);
-        assertFalse(response2.isSuccess());
+        assertEquals(original, Files.readString(refactoringTargetFile),
+            "rejected extractions must not modify the file");
     }
 }

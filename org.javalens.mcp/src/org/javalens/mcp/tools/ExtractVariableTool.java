@@ -1,6 +1,7 @@
 package org.javalens.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.eclipse.core.resources.IFile;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.dom.AST;
@@ -14,9 +15,14 @@ import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.MethodInvocation;
 import org.eclipse.jdt.core.dom.NodeFinder;
 import org.eclipse.jdt.core.dom.Statement;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.text.edits.InsertEdit;
+import org.eclipse.text.edits.ReplaceEdit;
+import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
-import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.ChangeEngine;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,8 +36,11 @@ import java.util.function.Supplier;
 
 /**
  * Extract an expression into a local variable.
+ *
+ * <p>Sprint 14b: auto-applies by default via
+ * {@link AbstractApplyingRefactoringTool}.</p>
  */
-public class ExtractVariableTool extends AbstractTool {
+public class ExtractVariableTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(ExtractVariableTool.class);
 
@@ -45,8 +54,9 @@ public class ExtractVariableTool extends AbstractTool {
         "try", "void", "volatile", "while", "true", "false", "null"
     );
 
-    public ExtractVariableTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public ExtractVariableTool(Supplier<IJdtService> serviceSupplier,
+                               RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -59,11 +69,13 @@ public class ExtractVariableTool extends AbstractTool {
         return """
             Extract an expression at the given position into a local variable.
 
-            Returns the text edits needed to extract the expression.
-            The caller should apply these edits to perform the extraction.
+            Applies the extraction directly (default) and returns
+            { filesModified, diff, undoChangeId, summary }. Verify with
+            compile_workspace; revert with undo_refactoring(undoChangeId).
+            Pass auto_apply: false to stage instead — returns { changeId, diff }.
 
             USAGE: Select expression by providing start and end positions
-            OUTPUT: Variable declaration and replacement edits
+            OUTPUT: Modified file + unified diff + undo handle
 
             IMPORTANT: Uses ZERO-BASED coordinates.
 
@@ -102,14 +114,14 @@ public class ExtractVariableTool extends AbstractTool {
             )
         ));
         schema.put("required", List.of("filePath", "startLine", "startColumn", "endLine", "endColumn"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
-    protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
+    protected Preparation prepareChange(IJdtService service, JsonNode arguments) throws Exception {
         String filePath = getStringParam(arguments, "filePath");
         if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("filePath", "Required"));
         }
 
         int startLine = getIntParam(arguments, "startLine", -1);
@@ -119,123 +131,103 @@ public class ExtractVariableTool extends AbstractTool {
         String variableName = getStringParam(arguments, "variableName");
 
         if (startLine < 0 || startColumn < 0 || endLine < 0 || endColumn < 0) {
-            return ToolResponse.invalidParameter("positions", "All positions must be >= 0");
+            return Preparation.fail(
+                ToolResponse.invalidParameter("positions", "All positions must be >= 0"));
         }
 
-        try {
-            Path path = Path.of(filePath);
-            ICompilationUnit cu = service.getCompilationUnit(path);
-            if (cu == null) {
-                return ToolResponse.fileNotFound(filePath);
-            }
-
-            // Parse to AST with bindings
-            ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
-            parser.setSource(cu);
-            parser.setResolveBindings(true);
-            parser.setBindingsRecovery(true);
-            CompilationUnit ast = (CompilationUnit) parser.createAST(null);
-
-            // Calculate offsets
-            int startOffset = ast.getPosition(startLine + 1, startColumn);
-            int endOffset = ast.getPosition(endLine + 1, endColumn);
-
-            if (startOffset < 0 || endOffset < 0 || startOffset >= endOffset) {
-                return ToolResponse.invalidParameter("positions", "Invalid selection range");
-            }
-
-            // Find the expression at this range
-            NodeFinder finder = new NodeFinder(ast, startOffset, endOffset - startOffset);
-            ASTNode coveredNode = finder.getCoveredNode();
-            ASTNode coveringNode = finder.getCoveringNode();
-
-            Expression expression = null;
-            if (coveredNode instanceof Expression expr) {
-                expression = expr;
-            } else if (coveringNode instanceof Expression expr) {
-                expression = expr;
-            }
-
-            if (expression == null) {
-                return ToolResponse.invalidParameter("selection", "No extractable expression at selection");
-            }
-
-            // Get the type of the expression
-            ITypeBinding typeBinding = expression.resolveTypeBinding();
-            String typeName = typeBinding != null ? typeBinding.getName() : "var";
-
-            // Generate variable name if not provided
-            if (variableName == null || variableName.isBlank()) {
-                variableName = suggestVariableName(expression, typeBinding);
-            }
-
-            if (!isValidJavaIdentifier(variableName)) {
-                return ToolResponse.invalidParameter("variableName", "Not a valid Java identifier");
-            }
-
-            // Find the containing statement to insert before
-            Statement containingStatement = findContainingStatement(expression);
-            if (containingStatement == null) {
-                return ToolResponse.invalidParameter("selection", "Cannot find containing statement");
-            }
-
-            // Get expression text
-            String expressionText = expression.toString();
-
-            // Build the variable declaration
-            String declaration = typeName + " " + variableName + " = " + expressionText + ";";
-
-            // Calculate insertion point
-            int insertOffset = containingStatement.getStartPosition();
-            int insertLine = ast.getLineNumber(insertOffset) - 1;
-
-            // Get indentation
-            String indent = getIndentation(cu, containingStatement);
-
-            // Build edits
-            List<Map<String, Object>> edits = new ArrayList<>();
-
-            // Edit 1: Insert variable declaration
-            Map<String, Object> insertEdit = new LinkedHashMap<>();
-            insertEdit.put("type", "insert");
-            insertEdit.put("line", insertLine);
-            insertEdit.put("column", 0);
-            insertEdit.put("offset", insertOffset);
-            insertEdit.put("newText", indent + declaration + "\n");
-            edits.add(insertEdit);
-
-            // Edit 2: Replace expression with variable name
-            Map<String, Object> replaceEdit = new LinkedHashMap<>();
-            replaceEdit.put("type", "replace");
-            replaceEdit.put("startLine", ast.getLineNumber(expression.getStartPosition()) - 1);
-            replaceEdit.put("startColumn", ast.getColumnNumber(expression.getStartPosition()));
-            replaceEdit.put("endLine", ast.getLineNumber(expression.getStartPosition() + expression.getLength()) - 1);
-            replaceEdit.put("endColumn", ast.getColumnNumber(expression.getStartPosition() + expression.getLength()));
-            replaceEdit.put("startOffset", expression.getStartPosition());
-            replaceEdit.put("endOffset", expression.getStartPosition() + expression.getLength());
-            replaceEdit.put("oldText", expressionText);
-            replaceEdit.put("newText", variableName);
-            edits.add(replaceEdit);
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("filePath", service.getPathUtils().formatPath(path));
-            data.put("variableName", variableName);
-            data.put("variableType", typeName);
-            data.put("expressionText", expressionText);
-            data.put("declaration", declaration);
-            data.put("edits", edits);
-
-            return ToolResponse.success(data, ResponseMeta.builder()
-                .suggestedNextTools(List.of(
-                    "Apply the text edits to complete the extraction",
-                    "get_diagnostics to verify no errors"
-                ))
-                .build());
-
-        } catch (Exception e) {
-            log.error("Error extracting variable: {}", e.getMessage(), e);
-            return ToolResponse.internalError(e);
+        Path path = Path.of(filePath);
+        ICompilationUnit cu = service.getCompilationUnit(path);
+        if (cu == null) {
+            return Preparation.fail(ToolResponse.fileNotFound(filePath));
         }
+
+        // Parse to AST with bindings
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+        parser.setSource(cu);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+
+        // Calculate offsets
+        int startOffset = ast.getPosition(startLine + 1, startColumn);
+        int endOffset = ast.getPosition(endLine + 1, endColumn);
+
+        if (startOffset < 0 || endOffset < 0 || startOffset >= endOffset) {
+            return Preparation.fail(
+                ToolResponse.invalidParameter("positions", "Invalid selection range"));
+        }
+
+        // Find the expression at this range
+        NodeFinder finder = new NodeFinder(ast, startOffset, endOffset - startOffset);
+        ASTNode coveredNode = finder.getCoveredNode();
+        ASTNode coveringNode = finder.getCoveringNode();
+
+        Expression expression = null;
+        if (coveredNode instanceof Expression expr) {
+            expression = expr;
+        } else if (coveringNode instanceof Expression expr) {
+            expression = expr;
+        }
+
+        if (expression == null) {
+            return Preparation.fail(
+                ToolResponse.invalidParameter("selection", "No extractable expression at selection"));
+        }
+
+        // Get the type of the expression
+        ITypeBinding typeBinding = expression.resolveTypeBinding();
+        String typeName = typeBinding != null ? typeBinding.getName() : "var";
+
+        // Generate variable name if not provided
+        if (variableName == null || variableName.isBlank()) {
+            variableName = suggestVariableName(expression, typeBinding);
+        }
+
+        if (!isValidJavaIdentifier(variableName)) {
+            return Preparation.fail(
+                ToolResponse.invalidParameter("variableName", "Not a valid Java identifier"));
+        }
+
+        // Find the containing statement to insert before
+        Statement containingStatement = findContainingStatement(expression);
+        if (containingStatement == null) {
+            return Preparation.fail(
+                ToolResponse.invalidParameter("selection", "Cannot find containing statement"));
+        }
+
+        // Get expression text
+        String expressionText = expression.toString();
+
+        // Build the variable declaration
+        String declaration = typeName + " " + variableName + " = " + expressionText + ";";
+
+        // Calculate insertion point
+        int insertOffset = containingStatement.getStartPosition();
+
+        // Get indentation
+        String indent = getIndentation(cu, containingStatement);
+
+        // Build JDT edits: declaration inserted before the containing
+        // statement, expression replaced by the variable name.
+        List<TextEdit> edits = new ArrayList<>();
+        edits.add(new InsertEdit(insertOffset, indent + declaration + "\n"));
+        edits.add(new ReplaceEdit(
+            expression.getStartPosition(), expression.getLength(), variableName));
+
+        IFile file = (IFile) cu.getResource();
+        Change change = ChangeEngine.fromFileEdits(
+            "extract variable " + variableName, Map.of(file, edits));
+
+        Map<String, Object> extras = new LinkedHashMap<>();
+        extras.put("filePath", service.getPathUtils().formatPath(path));
+        extras.put("variableName", variableName);
+        extras.put("variableType", typeName);
+        extras.put("expressionText", expressionText);
+        extras.put("declaration", declaration);
+
+        String summary = "extract variable " + typeName + " " + variableName
+            + " = " + expressionText;
+        return Preparation.of(change, summary, extras);
     }
 
     private Statement findContainingStatement(ASTNode node) {
