@@ -377,7 +377,7 @@ public class JavaLensApplication implements IApplication {
 
         // Refactoring tools
         toolRegistry.register(new RenameSymbolTool(() -> jdtService, refactoringChangeCache));
-        toolRegistry.register(new OrganizeImportsTool(() -> jdtService));
+        toolRegistry.register(new OrganizeImportsTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new ExtractVariableTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new ExtractMethodTool(() -> jdtService, refactoringChangeCache));
 
@@ -403,9 +403,9 @@ public class JavaLensApplication implements IApplication {
         toolRegistry.register(new ExtractConstantTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new InlineVariableTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new InlineMethodTool(() -> jdtService, refactoringChangeCache));
-        toolRegistry.register(new ChangeMethodSignatureTool(() -> jdtService));
-        toolRegistry.register(new ExtractInterfaceTool(() -> jdtService));
-        toolRegistry.register(new ConvertAnonymousToLambdaTool(() -> jdtService));
+        toolRegistry.register(new ChangeMethodSignatureTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new ExtractInterfaceTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new ConvertAnonymousToLambdaTool(() -> jdtService, refactoringChangeCache));
 
         // Sprint 11 Phase E (v1.5.1): JDT-LTK structural refactoring tools.
         toolRegistry.register(new MoveClassTool(() -> jdtService));

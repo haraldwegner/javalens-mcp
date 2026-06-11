@@ -11,9 +11,16 @@ import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTParser;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.TypeDeclaration;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.ltk.core.refactoring.CompositeChange;
+import org.eclipse.text.edits.InsertEdit;
+import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
-import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.ChangeEngine;
+import org.javalens.mcp.refactoring.CreateFileChange;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,8 +35,12 @@ import java.util.stream.Collectors;
 
 /**
  * Extract an interface from a class containing selected public methods.
+ *
+ * <p>Sprint 14b: auto-applies by default via
+ * {@link AbstractApplyingRefactoringTool} — creates the interface file AND
+ * adds the implements clause in one Change; undo removes both.</p>
  */
-public class ExtractInterfaceTool extends AbstractTool {
+public class ExtractInterfaceTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(ExtractInterfaceTool.class);
 
@@ -43,8 +54,9 @@ public class ExtractInterfaceTool extends AbstractTool {
         "try", "void", "volatile", "while", "true", "false", "null"
     );
 
-    public ExtractInterfaceTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public ExtractInterfaceTool(Supplier<IJdtService> serviceSupplier,
+                                RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -57,11 +69,13 @@ public class ExtractInterfaceTool extends AbstractTool {
         return """
             Extract an interface from a class containing selected public methods.
 
-            Returns the text for a new interface file and edits to add 'implements'
-            clause to the original class.
+            Applies the extraction directly (default): creates the interface
+            file next to the class and adds the implements clause, returning
+            { filesModified, diff, undoChangeId, summary }. Undo removes the
+            new file and reverts the class. Pass auto_apply: false to stage.
 
             USAGE: Position on class, provide interface name, optionally specify methods
-            OUTPUT: Interface file content and class modification edit
+            OUTPUT: New interface file + modified class + undo handle
 
             IMPORTANT: Uses ZERO-BASED coordinates.
 
@@ -97,14 +111,14 @@ public class ExtractInterfaceTool extends AbstractTool {
             )
         ));
         schema.put("required", List.of("filePath", "line", "column", "interfaceName"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
-    protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
+    protected Preparation prepareChange(IJdtService service, JsonNode arguments) throws Exception {
         String filePath = getStringParam(arguments, "filePath");
         if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("filePath", "Required"));
         }
 
         int line = getIntParam(arguments, "line", -1);
@@ -112,15 +126,16 @@ public class ExtractInterfaceTool extends AbstractTool {
         String interfaceName = getStringParam(arguments, "interfaceName");
 
         if (line < 0 || column < 0) {
-            return ToolResponse.invalidParameter("line/column", "Must be >= 0");
+            return Preparation.fail(ToolResponse.invalidParameter("line/column", "Must be >= 0"));
         }
 
         if (interfaceName == null || interfaceName.isBlank()) {
-            return ToolResponse.invalidParameter("interfaceName", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("interfaceName", "Required"));
         }
 
         if (!isValidJavaIdentifier(interfaceName)) {
-            return ToolResponse.invalidParameter("interfaceName", "Not a valid Java identifier");
+            return Preparation.fail(
+                ToolResponse.invalidParameter("interfaceName", "Not a valid Java identifier"));
         }
 
         // Get optional method names
@@ -131,25 +146,27 @@ public class ExtractInterfaceTool extends AbstractTool {
             }
         }
 
-        try {
+        {
             Path path = Path.of(filePath);
             ICompilationUnit cu = service.getCompilationUnit(path);
             if (cu == null) {
-                return ToolResponse.fileNotFound(filePath);
+                return Preparation.fail(ToolResponse.fileNotFound(filePath));
             }
 
             // Get the type at position
             IType type = service.getTypeAtPosition(path, line, column);
             if (type == null) {
-                return ToolResponse.symbolNotFound("No class found at position");
+                return Preparation.fail(ToolResponse.symbolNotFound("No class found at position"));
             }
 
             // Verify it's a class (not interface or enum)
             if (type.isInterface()) {
-                return ToolResponse.invalidParameter("type", "Cannot extract interface from an interface");
+                return Preparation.fail(
+                    ToolResponse.invalidParameter("type", "Cannot extract interface from an interface"));
             }
             if (type.isEnum()) {
-                return ToolResponse.invalidParameter("type", "Cannot extract interface from an enum");
+                return Preparation.fail(
+                    ToolResponse.invalidParameter("type", "Cannot extract interface from an enum"));
             }
 
             // Collect public non-static methods
@@ -172,8 +189,8 @@ public class ExtractInterfaceTool extends AbstractTool {
             }
 
             if (methodsToExtract.isEmpty()) {
-                return ToolResponse.invalidParameter("methods",
-                    "No eligible public methods found to extract");
+                return Preparation.fail(ToolResponse.invalidParameter("methods",
+                    "No eligible public methods found to extract"));
             }
 
             // Get package name
@@ -213,8 +230,8 @@ public class ExtractInterfaceTool extends AbstractTool {
             // Find the type declaration in AST
             TypeDeclaration typeDecl = findTypeDeclaration(ast, type.getElementName());
 
-            // Build edit for adding 'implements' clause
-            List<Map<String, Object>> edits = new ArrayList<>();
+            // Build the implements-clause edit
+            List<TextEdit> classEdits = new ArrayList<>();
 
             if (typeDecl != null) {
                 // Check if class already has implements clause
@@ -229,31 +246,19 @@ public class ExtractInterfaceTool extends AbstractTool {
 
                     int classBodyStart = findClassBodyStart(source, typeDecl);
                     if (classBodyStart > 0) {
-                        Map<String, Object> implementsEdit = new LinkedHashMap<>();
-                        implementsEdit.put("type", "insert");
-
                         if (hasImplements) {
-                            // Add to existing implements list
-                            // Find the last interface and insert after it
+                            // Add to the existing implements list, after the last interface
                             int insertPos = findLastImplementsPosition(source, typeDecl);
-                            implementsEdit.put("offset", insertPos);
-                            implementsEdit.put("line", ast.getLineNumber(insertPos) - 1);
-                            implementsEdit.put("column", ast.getColumnNumber(insertPos));
-                            implementsEdit.put("newText", ", " + interfaceName);
+                            classEdits.add(new InsertEdit(insertPos, ", " + interfaceName));
                         } else {
                             // Add new implements clause before '{'
-                            implementsEdit.put("offset", classBodyStart);
-                            implementsEdit.put("line", ast.getLineNumber(classBodyStart) - 1);
-                            implementsEdit.put("column", ast.getColumnNumber(classBodyStart));
-                            implementsEdit.put("newText", " implements " + interfaceName);
+                            classEdits.add(new InsertEdit(classBodyStart, " implements " + interfaceName));
                         }
-
-                        edits.add(implementsEdit);
                     }
                 }
             }
 
-            // Determine interface file path
+            // Determine interface file path (next to the class file)
             String interfaceFileName = interfaceName + ".java";
             Path interfacePath;
             if (path.getParent() != null) {
@@ -262,29 +267,33 @@ public class ExtractInterfaceTool extends AbstractTool {
                 interfacePath = Path.of(interfaceFileName);
             }
 
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("className", type.getElementName());
-            data.put("interfaceName", interfaceName);
-            data.put("packageName", packageName);
-            data.put("interfaceFilePath", service.getPathUtils().formatPath(interfacePath));
-            data.put("interfaceContent", interfaceContent.toString());
-            data.put("extractedMethods", extractedMethods);
-            data.put("classEdits", edits);
-            data.put("sourceFilePath", service.getPathUtils().formatPath(path));
+            IFile classFile = (IFile) cu.getResource();
+            IFile interfaceFile = classFile.getParent()
+                .getFile(new org.eclipse.core.runtime.Path(interfaceFileName));
+            if (interfaceFile.exists()) {
+                return Preparation.fail(ToolResponse.invalidParameter("interfaceName",
+                    "File already exists: " + interfaceFile.getFullPath()));
+            }
 
-            return ToolResponse.success(data, ResponseMeta.builder()
-                .totalCount(extractedMethods.size())
-                .returnedCount(extractedMethods.size())
-                .suggestedNextTools(List.of(
-                    "Create the interface file with the provided content",
-                    "Apply the classEdits to add implements clause",
-                    "get_diagnostics to verify no errors"
-                ))
-                .build());
+            CompositeChange change = new CompositeChange("extract interface " + interfaceName);
+            change.add(new CreateFileChange(interfaceFile, interfaceContent.toString()));
+            if (!classEdits.isEmpty()) {
+                change.add(ChangeEngine.fromFileEdits(
+                    "implements " + interfaceName, Map.of(classFile, classEdits)));
+            }
 
-        } catch (Exception e) {
-            log.error("Error extracting interface: {}", e.getMessage(), e);
-            return ToolResponse.internalError(e);
+            Map<String, Object> extras = new LinkedHashMap<>();
+            extras.put("className", type.getElementName());
+            extras.put("interfaceName", interfaceName);
+            extras.put("packageName", packageName);
+            extras.put("interfaceFilePath", service.getPathUtils().formatPath(interfacePath));
+            extras.put("interfaceContent", interfaceContent.toString());
+            extras.put("extractedMethods", extractedMethods);
+            extras.put("sourceFilePath", service.getPathUtils().formatPath(path));
+
+            String summary = "extract interface " + interfaceName + " from "
+                + type.getElementName() + " (" + extractedMethods.size() + " methods)";
+            return Preparation.of((Change) change, summary, extras);
         }
     }
 

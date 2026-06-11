@@ -2,7 +2,6 @@ package org.javalens.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.eclipse.jdt.core.ICompilationUnit;
-import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.ASTParser;
@@ -22,9 +21,14 @@ import org.eclipse.jdt.core.dom.SimpleName;
 import org.eclipse.jdt.core.dom.SingleVariableDeclaration;
 import org.eclipse.jdt.core.dom.Statement;
 import org.eclipse.jdt.core.dom.ThisExpression;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.text.edits.ReplaceEdit;
+import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
-import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.ChangeEngine;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,13 +41,17 @@ import java.util.function.Supplier;
 
 /**
  * Convert an anonymous class implementing a functional interface to a lambda expression.
+ *
+ * <p>Sprint 14b: auto-applies by default via
+ * {@link AbstractApplyingRefactoringTool}.</p>
  */
-public class ConvertAnonymousToLambdaTool extends AbstractTool {
+public class ConvertAnonymousToLambdaTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(ConvertAnonymousToLambdaTool.class);
 
-    public ConvertAnonymousToLambdaTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public ConvertAnonymousToLambdaTool(Supplier<IJdtService> serviceSupplier,
+                                        RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -56,11 +64,13 @@ public class ConvertAnonymousToLambdaTool extends AbstractTool {
         return """
             Convert an anonymous class implementing a functional interface to a lambda expression.
 
-            Returns the text edit needed to convert the anonymous class to a lambda.
-            The caller should apply this edit to perform the conversion.
+            Applies the conversion directly (default) and returns
+            { filesModified, diff, undoChangeId, summary }. Verify with
+            compile_workspace; revert with undo_refactoring(undoChangeId).
+            Pass auto_apply: false to stage instead — returns { changeId, diff }.
 
             USAGE: Position cursor on the 'new' keyword of the anonymous class
-            OUTPUT: Edit to replace anonymous class with lambda
+            OUTPUT: Modified file + unified diff + undo handle
 
             IMPORTANT: Uses ZERO-BASED coordinates.
             REQUIREMENTS: The anonymous class must implement a functional interface
@@ -89,138 +99,121 @@ public class ConvertAnonymousToLambdaTool extends AbstractTool {
             )
         ));
         schema.put("required", List.of("filePath", "line", "column"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
-    protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
+    protected Preparation prepareChange(IJdtService service, JsonNode arguments) throws Exception {
         String filePath = getStringParam(arguments, "filePath");
         if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("filePath", "Required"));
         }
 
         int line = getIntParam(arguments, "line", -1);
         int column = getIntParam(arguments, "column", -1);
 
         if (line < 0 || column < 0) {
-            return ToolResponse.invalidParameter("line/column", "Must be >= 0");
+            return Preparation.fail(ToolResponse.invalidParameter("line/column", "Must be >= 0"));
         }
 
-        try {
-            Path path = Path.of(filePath);
-            ICompilationUnit cu = service.getCompilationUnit(path);
-            if (cu == null) {
-                return ToolResponse.fileNotFound(filePath);
-            }
+        Path path = Path.of(filePath);
+        ICompilationUnit cu = service.getCompilationUnit(path);
+        if (cu == null) {
+            return Preparation.fail(ToolResponse.fileNotFound(filePath));
+        }
 
-            // Parse to AST with bindings
-            ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
-            parser.setSource(cu);
-            parser.setResolveBindings(true);
-            parser.setBindingsRecovery(true);
-            CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+        // Parse to AST with bindings
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+        parser.setSource(cu);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        CompilationUnit ast = (CompilationUnit) parser.createAST(null);
 
-            // Calculate offset
-            int offset = ast.getPosition(line + 1, column);
-            if (offset < 0) {
-                return ToolResponse.invalidParameter("position", "Invalid position");
-            }
+        // Calculate offset
+        int offset = ast.getPosition(line + 1, column);
+        if (offset < 0) {
+            return Preparation.fail(ToolResponse.invalidParameter("position", "Invalid position"));
+        }
 
-            // Find the ClassInstanceCreation with AnonymousClassDeclaration
-            NodeFinder finder = new NodeFinder(ast, offset, 0);
-            ASTNode node = finder.getCoveringNode();
+        // Find the ClassInstanceCreation with AnonymousClassDeclaration
+        NodeFinder finder = new NodeFinder(ast, offset, 0);
+        ASTNode node = finder.getCoveringNode();
 
-            ClassInstanceCreation creation = findClassInstanceCreation(node);
-            if (creation == null) {
-                return ToolResponse.invalidParameter("position",
-                    "No anonymous class found at position. Position cursor on 'new' keyword.");
-            }
+        ClassInstanceCreation creation = findClassInstanceCreation(node);
+        if (creation == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("position",
+                "No anonymous class found at position. Position cursor on 'new' keyword."));
+        }
 
-            AnonymousClassDeclaration anonymousClass = creation.getAnonymousClassDeclaration();
-            if (anonymousClass == null) {
-                return ToolResponse.invalidParameter("position",
-                    "This is not an anonymous class declaration");
-            }
+        AnonymousClassDeclaration anonymousClass = creation.getAnonymousClassDeclaration();
+        if (anonymousClass == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("position",
+                "This is not an anonymous class declaration"));
+        }
 
-            // Check if it's a functional interface
-            // Use getType().resolveBinding() to get the interface type, not the anonymous class type
-            ITypeBinding typeBinding = creation.getType().resolveBinding();
-            if (typeBinding == null) {
-                return ToolResponse.invalidParameter("type", "Cannot resolve type binding");
-            }
+        // Check if it's a functional interface
+        // Use getType().resolveBinding() to get the interface type, not the anonymous class type
+        ITypeBinding typeBinding = creation.getType().resolveBinding();
+        if (typeBinding == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("type", "Cannot resolve type binding"));
+        }
 
-            IMethodBinding samMethod = findSingleAbstractMethod(typeBinding);
-            if (samMethod == null) {
-                return ToolResponse.invalidParameter("type",
-                    "Not a functional interface - must have exactly one abstract method");
-            }
+        IMethodBinding samMethod = findSingleAbstractMethod(typeBinding);
+        if (samMethod == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("type",
+                "Not a functional interface - must have exactly one abstract method"));
+        }
 
-            // Get the method declaration from the anonymous class
-            @SuppressWarnings("unchecked")
-            List<?> bodyDecls = anonymousClass.bodyDeclarations();
-            MethodDeclaration methodDecl = null;
+        // Get the method declaration from the anonymous class
+        @SuppressWarnings("unchecked")
+        List<?> bodyDecls = anonymousClass.bodyDeclarations();
+        MethodDeclaration methodDecl = null;
 
-            for (Object decl : bodyDecls) {
-                if (decl instanceof MethodDeclaration md) {
-                    if (methodDecl != null) {
-                        // Multiple methods - can't convert to lambda
-                        return ToolResponse.invalidParameter("anonymousClass",
-                            "Anonymous class has multiple methods, cannot convert to lambda");
-                    }
-                    methodDecl = md;
+        for (Object decl : bodyDecls) {
+            if (decl instanceof MethodDeclaration md) {
+                if (methodDecl != null) {
+                    // Multiple methods - can't convert to lambda
+                    return Preparation.fail(ToolResponse.invalidParameter("anonymousClass",
+                        "Anonymous class has multiple methods, cannot convert to lambda"));
                 }
+                methodDecl = md;
             }
-
-            if (methodDecl == null) {
-                return ToolResponse.invalidParameter("anonymousClass",
-                    "Anonymous class has no method implementation");
-            }
-
-            // Check for 'this' references which have different semantics in lambdas
-            if (usesThisExpression(methodDecl)) {
-                return ToolResponse.invalidParameter("anonymousClass",
-                    "Method uses 'this' keyword which has different semantics in lambda. " +
-                    "Manual review required.");
-            }
-
-            // Build the lambda expression
-            String lambdaExpression = buildLambdaExpression(methodDecl, cu);
-            if (lambdaExpression == null) {
-                return ToolResponse.internalError("Failed to build lambda expression");
-            }
-
-            // Build the edit
-            List<Map<String, Object>> edits = new ArrayList<>();
-            Map<String, Object> replaceEdit = new LinkedHashMap<>();
-            replaceEdit.put("type", "replace");
-            replaceEdit.put("startLine", ast.getLineNumber(creation.getStartPosition()) - 1);
-            replaceEdit.put("startColumn", ast.getColumnNumber(creation.getStartPosition()));
-            replaceEdit.put("endLine", ast.getLineNumber(creation.getStartPosition() + creation.getLength()) - 1);
-            replaceEdit.put("endColumn", ast.getColumnNumber(creation.getStartPosition() + creation.getLength()));
-            replaceEdit.put("startOffset", creation.getStartPosition());
-            replaceEdit.put("endOffset", creation.getStartPosition() + creation.getLength());
-            replaceEdit.put("oldText", getNodeText(cu, creation));
-            replaceEdit.put("newText", lambdaExpression);
-            edits.add(replaceEdit);
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("filePath", service.getPathUtils().formatPath(path));
-            data.put("interfaceType", typeBinding.getName());
-            data.put("methodName", samMethod.getName());
-            data.put("lambdaExpression", lambdaExpression);
-            data.put("edits", edits);
-
-            return ToolResponse.success(data, ResponseMeta.builder()
-                .suggestedNextTools(List.of(
-                    "Apply the text edit to complete the conversion",
-                    "get_diagnostics to verify no errors"
-                ))
-                .build());
-
-        } catch (Exception e) {
-            log.error("Error converting to lambda: {}", e.getMessage(), e);
-            return ToolResponse.internalError(e);
         }
+
+        if (methodDecl == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("anonymousClass",
+                "Anonymous class has no method implementation"));
+        }
+
+        // Check for 'this' references which have different semantics in lambdas
+        if (usesThisExpression(methodDecl)) {
+            return Preparation.fail(ToolResponse.invalidParameter("anonymousClass",
+                "Method uses 'this' keyword which has different semantics in lambda. " +
+                "Manual review required."));
+        }
+
+        // Build the lambda expression
+        String lambdaExpression = buildLambdaExpression(methodDecl, cu);
+        if (lambdaExpression == null) {
+            return Preparation.fail(ToolResponse.internalError("Failed to build lambda expression"));
+        }
+
+        List<TextEdit> edits = new ArrayList<>();
+        edits.add(new ReplaceEdit(
+            creation.getStartPosition(), creation.getLength(), lambdaExpression));
+
+        IFile file = (IFile) cu.getResource();
+        Change change = ChangeEngine.fromFileEdits(
+            "convert anonymous to lambda (" + typeBinding.getName() + ")", Map.of(file, edits));
+
+        Map<String, Object> extras = new LinkedHashMap<>();
+        extras.put("filePath", service.getPathUtils().formatPath(path));
+        extras.put("interfaceType", typeBinding.getName());
+        extras.put("methodName", samMethod.getName());
+        extras.put("lambdaExpression", lambdaExpression);
+
+        String summary = "convert anonymous " + typeBinding.getName() + " to lambda";
+        return Preparation.of(change, summary, extras);
     }
 
     private ClassInstanceCreation findClassInstanceCreation(ASTNode node) {
@@ -395,17 +388,4 @@ public class ConvertAnonymousToLambdaTool extends AbstractTool {
         return lambda.toString();
     }
 
-    private String getNodeText(ICompilationUnit cu, ASTNode node) {
-        try {
-            String source = cu.getSource();
-            if (source != null) {
-                int start = node.getStartPosition();
-                int end = start + node.getLength();
-                return source.substring(start, end);
-            }
-        } catch (JavaModelException e) {
-            log.debug("Error getting node text: {}", e.getMessage());
-        }
-        return "";
-    }
 }

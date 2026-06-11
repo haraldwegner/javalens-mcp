@@ -18,9 +18,14 @@ import org.eclipse.jdt.core.dom.MethodInvocation;
 import org.eclipse.jdt.core.dom.SingleVariableDeclaration;
 import org.eclipse.jdt.core.search.IJavaSearchConstants;
 import org.eclipse.jdt.core.search.SearchMatch;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.text.edits.ReplaceEdit;
+import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
-import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.ChangeEngine;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,8 +39,11 @@ import java.util.function.Supplier;
 
 /**
  * Change method signature (parameters, return type, name) and update all call sites.
+ *
+ * <p>Sprint 14b: auto-applies by default via
+ * {@link AbstractApplyingRefactoringTool}.</p>
  */
-public class ChangeMethodSignatureTool extends AbstractTool {
+public class ChangeMethodSignatureTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(ChangeMethodSignatureTool.class);
 
@@ -49,8 +57,9 @@ public class ChangeMethodSignatureTool extends AbstractTool {
         "try", "void", "volatile", "while", "true", "false", "null"
     );
 
-    public ChangeMethodSignatureTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public ChangeMethodSignatureTool(Supplier<IJdtService> serviceSupplier,
+                                     RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -63,11 +72,13 @@ public class ChangeMethodSignatureTool extends AbstractTool {
         return """
             Change method signature (parameters, return type, or name) and update all call sites.
 
-            Returns text edits for the method declaration and all call sites.
-            The caller should apply these edits to perform the change.
+            Applies the change directly (default) and returns
+            { filesModified, diff, undoChangeId, summary }. Verify with
+            compile_workspace; revert with undo_refactoring(undoChangeId).
+            Pass auto_apply: false to stage instead — returns { changeId, diff }.
 
             USAGE: Position on method declaration, provide changes
-            OUTPUT: Edits for declaration and all call sites
+            OUTPUT: Modified files + unified diff + undo handle
 
             PARAMETER OPERATIONS:
             - Add new parameter with default value for existing calls
@@ -122,21 +133,21 @@ public class ChangeMethodSignatureTool extends AbstractTool {
 
         schema.put("properties", properties);
         schema.put("required", List.of("filePath", "line", "column"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
-    protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
+    protected Preparation prepareChange(IJdtService service, JsonNode arguments) throws Exception {
         String filePath = getStringParam(arguments, "filePath");
         if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("filePath", "Required"));
         }
 
         int line = getIntParam(arguments, "line", -1);
         int column = getIntParam(arguments, "column", -1);
 
         if (line < 0 || column < 0) {
-            return ToolResponse.invalidParameter("line/column", "Must be >= 0");
+            return Preparation.fail(ToolResponse.invalidParameter("line/column", "Must be >= 0"));
         }
 
         String newName = getStringParam(arguments, "newName");
@@ -152,8 +163,8 @@ public class ChangeMethodSignatureTool extends AbstractTool {
                 String pDefault = param.has("defaultValue") ? param.get("defaultValue").asText() : null;
 
                 if (pName == null || pType == null) {
-                    return ToolResponse.invalidParameter("newParameters",
-                        "Each parameter must have 'name' and 'type'");
+                    return Preparation.fail(ToolResponse.invalidParameter("newParameters",
+                        "Each parameter must have 'name' and 'type'"));
                 }
                 newParameters.add(new ParameterInfo(pName, pType, pDefault));
             }
@@ -161,21 +172,22 @@ public class ChangeMethodSignatureTool extends AbstractTool {
 
         // Validate at least one change is specified
         if (newName == null && newReturnType == null && newParameters == null) {
-            return ToolResponse.invalidParameter("changes",
-                "At least one of newName, newReturnType, or newParameters must be specified");
+            return Preparation.fail(ToolResponse.invalidParameter("changes",
+                "At least one of newName, newReturnType, or newParameters must be specified"));
         }
 
         if (newName != null && !isValidJavaIdentifier(newName)) {
-            return ToolResponse.invalidParameter("newName", "Not a valid Java identifier");
+            return Preparation.fail(
+                ToolResponse.invalidParameter("newName", "Not a valid Java identifier"));
         }
 
-        try {
+        {
             Path path = Path.of(filePath);
 
             // Get the method at position
             IJavaElement element = service.getElementAtPosition(path, line, column);
             if (!(element instanceof IMethod method)) {
-                return ToolResponse.symbolNotFound("No method found at position");
+                return Preparation.fail(ToolResponse.symbolNotFound("No method found at position"));
             }
 
             String oldName = method.getElementName();
@@ -212,13 +224,14 @@ public class ChangeMethodSignatureTool extends AbstractTool {
             List<SearchMatch> references = service.getSearchService().findReferences(
                 method, IJavaSearchConstants.REFERENCES, 1000);
 
-            // Collect all edits
-            Map<String, List<Map<String, Object>>> editsByFile = new LinkedHashMap<>();
+            // Collect all edits as real JDT edits per IFile
+            Map<IFile, List<TextEdit>> editsByFile = new LinkedHashMap<>();
 
             // Edit 1: Update method declaration
             ICompilationUnit methodCu = method.getCompilationUnit();
             if (methodCu == null) {
-                return ToolResponse.invalidParameter("method", "Cannot access method source");
+                return Preparation.fail(
+                    ToolResponse.invalidParameter("method", "Cannot access method source"));
             }
 
             ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
@@ -228,7 +241,8 @@ public class ChangeMethodSignatureTool extends AbstractTool {
 
             MethodDeclaration methodDecl = findMethodDeclaration(ast, method);
             if (methodDecl == null) {
-                return ToolResponse.invalidParameter("method", "Cannot find method in AST");
+                return Preparation.fail(
+                    ToolResponse.invalidParameter("method", "Cannot find method in AST"));
             }
 
             // Build new method signature
@@ -236,28 +250,15 @@ public class ChangeMethodSignatureTool extends AbstractTool {
             int sigStart = getSignatureStart(methodDecl, ast);
             int sigEnd = getSignatureEnd(methodDecl);
 
-            String methodFilePath = service.getPathUtils().formatPath(
-                Path.of(methodCu.getResource().getLocation().toOSString()));
-
-            Map<String, Object> declEdit = new LinkedHashMap<>();
-            declEdit.put("type", "replace");
-            declEdit.put("startLine", ast.getLineNumber(sigStart) - 1);
-            declEdit.put("startColumn", ast.getColumnNumber(sigStart));
-            declEdit.put("endLine", ast.getLineNumber(sigEnd) - 1);
-            declEdit.put("endColumn", ast.getColumnNumber(sigEnd));
-            declEdit.put("startOffset", sigStart);
-            declEdit.put("endOffset", sigEnd);
-            declEdit.put("oldSignature", getSignatureText(methodCu, sigStart, sigEnd));
-            declEdit.put("newSignature", newSignature);
-            declEdit.put("isDeclaration", true);
-
-            editsByFile.computeIfAbsent(methodFilePath, k -> new ArrayList<>()).add(declEdit);
+            IFile methodFile = (IFile) methodCu.getResource();
+            editsByFile.computeIfAbsent(methodFile, k -> new ArrayList<>())
+                .add(new ReplaceEdit(sigStart, sigEnd - sigStart, newSignature));
 
             // Edit 2: Update all call sites
             for (SearchMatch match : references) {
                 try {
-                    updateCallSite(match, oldName, newName, oldParamNames, newParameters,
-                        paramMapping, service, editsByFile);
+                    updateCallSite(match, oldName, newName, newParameters,
+                        paramMapping, editsByFile);
                 } catch (Exception e) {
                     log.debug("Error updating call site: {}", e.getMessage());
                 }
@@ -268,32 +269,25 @@ public class ChangeMethodSignatureTool extends AbstractTool {
                 .mapToInt(List::size)
                 .sum();
 
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("oldName", oldName);
-            data.put("newName", newName);
-            data.put("oldReturnType", oldReturnType);
-            data.put("newReturnType", newReturnType);
-            data.put("oldParameterCount", oldParamTypes.length);
-            data.put("newParameterCount", newParameters.size());
-            data.put("newParameters", newParameters.stream()
+            Change change = ChangeEngine.fromFileEdits(
+                "change signature of " + oldName, editsByFile);
+
+            Map<String, Object> extras = new LinkedHashMap<>();
+            extras.put("oldName", oldName);
+            extras.put("newName", newName);
+            extras.put("oldReturnType", oldReturnType);
+            extras.put("newReturnType", newReturnType);
+            extras.put("oldParameterCount", oldParamTypes.length);
+            extras.put("newParameterCount", newParameters.size());
+            extras.put("newParameters", newParameters.stream()
                 .map(p -> Map.of("name", p.name, "type", p.type))
                 .toList());
-            data.put("totalEdits", totalEdits);
-            data.put("filesAffected", editsByFile.size());
-            data.put("editsByFile", editsByFile);
+            extras.put("totalEdits", totalEdits);
+            extras.put("filesAffected", editsByFile.size());
 
-            return ToolResponse.success(data, ResponseMeta.builder()
-                .totalCount(totalEdits)
-                .returnedCount(totalEdits)
-                .suggestedNextTools(List.of(
-                    "Apply the text edits to complete the signature change",
-                    "get_diagnostics to verify no errors"
-                ))
-                .build());
-
-        } catch (Exception e) {
-            log.error("Error changing method signature: {}", e.getMessage(), e);
-            return ToolResponse.internalError(e);
+            String summary = "change signature of " + oldName + " -> " + newSignature
+                + " (" + totalEdits + " edits in " + editsByFile.size() + " files)";
+            return Preparation.of(change, summary, extras);
         }
     }
 
@@ -392,9 +386,9 @@ public class ChangeMethodSignatureTool extends AbstractTool {
     }
 
     private void updateCallSite(SearchMatch match, String oldName, String newName,
-                                String[] oldParamNames, List<ParameterInfo> newParams,
-                                int[] paramMapping, IJdtService service,
-                                Map<String, List<Map<String, Object>>> editsByFile)
+                                List<ParameterInfo> newParams,
+                                int[] paramMapping,
+                                Map<IFile, List<TextEdit>> editsByFile)
             throws JavaModelException {
 
         Object element = match.getElement();
@@ -477,23 +471,10 @@ public class ChangeMethodSignatureTool extends AbstractTool {
         newCall.append(String.join(", ", newArgs));
         newCall.append(")");
 
-        // Create edit
-        String callFilePath = service.getPathUtils().formatPath(
-            Path.of(cu.getResource().getLocation().toOSString()));
-
-        Map<String, Object> callEdit = new LinkedHashMap<>();
-        callEdit.put("type", "replace");
-        callEdit.put("startLine", ast.getLineNumber(mi.getStartPosition()) - 1);
-        callEdit.put("startColumn", ast.getColumnNumber(mi.getStartPosition()));
-        callEdit.put("endLine", ast.getLineNumber(mi.getStartPosition() + mi.getLength()) - 1);
-        callEdit.put("endColumn", ast.getColumnNumber(mi.getStartPosition() + mi.getLength()));
-        callEdit.put("startOffset", mi.getStartPosition());
-        callEdit.put("endOffset", mi.getStartPosition() + mi.getLength());
-        callEdit.put("oldText", mi.toString());
-        callEdit.put("newText", newCall.toString());
-        callEdit.put("isDeclaration", false);
-
-        editsByFile.computeIfAbsent(callFilePath, k -> new ArrayList<>()).add(callEdit);
+        if (cu.getResource() instanceof IFile callFile) {
+            editsByFile.computeIfAbsent(callFile, k -> new ArrayList<>())
+                .add(new ReplaceEdit(mi.getStartPosition(), mi.getLength(), newCall.toString()));
+        }
     }
 
     private boolean isValidJavaIdentifier(String name) {
