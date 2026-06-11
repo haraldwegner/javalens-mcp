@@ -126,6 +126,25 @@ curl -X POST http://127.0.0.1:<port>/mcp -H 'Authorization: Bearer <token>' -d '
 - [~] Sandboxed-agent reproduction: Stage 0 web check reframed this to "Antigravity orphan-survival" (nsjail does not structurally block fork+exec; the real Antigravity bug is per-conversation MCP-child orphaning, [discuss.ai.google.dev #139866](https://discuss.ai.google.dev/t/bug-all-mcp-server-processes-are-orphaned-after-conversation-ends-accumulate-indefinitely-causing-system-memory-exhaustion/139866)). Resident-JVM-survives-conversation-cycle smoke deferred to user with their installed Antigravity.
 - [x] `docs/release-notes/v1.8.5.md` written, covering default-transport flip + USP framing + bug #9 leak fix coordinated with manager v0.15.0.
 - [x] Bundle-Version + pom versions bumped `1.8.0.qualifier` → `1.8.5.qualifier` across 4 manifests + 8 poms + product.
-- [ ] Tag `v1.8.5` pushed; CI publishes the GitHub Release as Latest. *(Pending: user "push" approval after this Stage-7 commit lands.)*
+- [x] Tag `v1.8.5` pushed; CI published the GitHub Release as Latest (2026-06-08).
 - [x] No AI-attribution boilerplate anywhere.
-- [ ] Memory updated: `project_sprint_state.md` → "fork Sprint 14a closed, v1.8.5 shipped; HTTP/SSE is default; manager Sprint 15 ships coupled v0.15.0 with bug #9 end-to-end closure". *(Updated at Stage 13 once both repos ship; partial update after this commit notes 14a closure.)*
+- [x] Memory updated: `project_sprint_state.md` → "fork Sprint 14a closed, v1.8.5 shipped; HTTP/SSE is default; manager Sprint 15 ships coupled v0.15.0 with bug #9 end-to-end closure".
+
+## Post-ship hotfix line (the 14a line stays open for transport-related hotfixes)
+
+Sprint 14a's release line carries transport/protocol hotfixes discovered in live verification of the v1.8.5 + manager v0.15.x pair. Content sprints (14b full-apply, 15 modernisation) are NOT blocked on this line and proceed independently.
+
+### v1.8.6 — MCP protocolVersion negotiation (SHIPPED 2026-06-09, Latest)
+
+Pre-v1.8.6 the `initialize` response hardcoded `protocolVersion: "2024-11-05"`. Per the MCP spec, a client that requests a newer version and receives an unsupported echo MUST disconnect — Claude Code did exactly that, killing every HTTP connector at session start. Fix: `SUPPORTED_PROTOCOL_VERSIONS = {2024-11-05, 2025-03-26, 2025-06-18}`; echo the client's requested version when supported, else respond with the latest supported. Live-verified against Claude Code, Cursor, and Antigravity (all three negotiate cleanly; Antigravity smoke 2026-06-10 ran 8 tools / 0 connection errors).
+
+### v1.8.7 — `readOnlyHint` tool annotations (PLANNED; re-scoped from Sprint 14b → 14a line per Harald 2026-06-11)
+
+**Motivation (Cursor field feedback, [`../javalens_feeback_from_cursor.md`](../javalens_feeback_from_cursor.md)):** in Cursor **Ask mode**, `CallMcpTool` is rejected as non-readonly, blocking ALL javalens use — even pure analysis calls — until the user switches to Agent mode. The MCP spec (protocol ≥ 2025-03-26) defines per-tool `annotations` including `readOnlyHint: true`; clients use it to allow read-only tools in restricted modes.
+
+**Scope:**
+- Add `annotations` to the `tools/list` response schema (the negotiation shipped in v1.8.6 already gates which clients see ≥2025-03-26 features).
+- Mark the detect/analysis tool set `readOnlyHint: true` — rule of thumb: `find_*`, `get_*`, `analyze_*`, `search_*`, `list_projects`, `health_check`, `validate_syntax`. Exact set decided at implementation; anything that mutates files, project config, or workspace state (refactor tools, `generate_*`, `apply_quick_fix`, `format`, `organize_imports`, `load_project`/`add_project`/`remove_project`/`refresh_workspace`, dependency tools, `run_tests`, `compile_workspace`) ships WITHOUT the hint.
+- JUnit: annotation presence/absence pinned per tool category; regression test that pre-2025-03-26 clients are unaffected.
+
+**Acceptance:** Cursor Ask mode permits `health_check`, `list_projects`, `analyze_type`, `analyze_method`, `find_references`, `search_symbols`, diagnostics tools. Verified live in Cursor.

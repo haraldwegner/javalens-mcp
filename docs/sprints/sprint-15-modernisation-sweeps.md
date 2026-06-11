@@ -27,6 +27,18 @@ Find-and-batch-apply for Java language evolution. JDT already knows what `var` /
 
 Each find tool returns ranked candidates with location + before/after sketch. Each pairs with a per-site or batch apply (some already exist; some new).
 
+## Cursor-feedback DX block (added 2026-06-11)
+
+Source: real-agent field feedback from a Cursor session driving the latency investigation through `jl-strategies-orb` — [`../javalens_feeback_from_cursor.md`](../javalens_feeback_from_cursor.md). Five symbol-resolution / error-DX items ship in this sprint alongside the modernisation tools (the sixth feedback item, `readOnlyHint` for Ask mode, was re-scoped to the 14a hotfix line → v1.8.7):
+
+1. **FQN method lookup.** `find_references` (and siblings) with `package.Type.method` — e.g. `com.jats2.model.portfolio.model.PortfolioManager.registerContract` — returns `SYMBOL_NOT_FOUND` today. Support `Type.method` and fully-qualified `package.Type.method` forms, including overload disambiguation via the existing FQN-overload extension from v1.8.0.
+2. **`search_symbols` member coverage.** Private/local methods (`registerContract`) and fields (`ptReceiver`) are invisible to `search_symbols` even though `analyze_type` lists them. Add opt-in flags (or default inclusion) for methods, fields, private members, anonymous/nested-class members.
+3. **Resolved-symbol echo.** Location-based calls silently resolve whatever token the column lands on (observed: asking near `PortfolioManager.registerContract(...)` resolved type `MarketState`). Every location-based response leads with the `symbol` it actually resolved, so agents can detect mis-resolution before trusting reference lists.
+4. **Nearby candidates on position errors.** `analyze_method` → `Position is not on a method` returns the nearby candidate methods + their declaration ranges instead of a bare error.
+5. **Example argument shapes in errors.** Each error response includes an example of the accepted argument shape for that tool. (The existing `hint` field already proved its worth live — an Antigravity agent self-corrected a wrong-package FQN via the `Use search_symbols` hint, 2026-06-10. This item extends that pattern.)
+
+Acceptance: re-run the documented friction cases from the feedback doc verbatim — each one must succeed or return an actionable error with candidates/examples.
+
 ## Dependencies
 
 - **Standalone** — no prerequisite from Sprint 14, 15, or 17.

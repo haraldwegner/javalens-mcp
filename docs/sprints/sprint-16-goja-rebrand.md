@@ -47,7 +47,7 @@ Ship **goja-mcp v1.0** as the renamed, repackaged, namespace-cleaned successor t
 
 ### Service consolidation (Stream 2)
 
-The tool-cap pressure: Antigravity caps ~100 tools total across all configured MCP servers. javalens-mcp surface today:
+The tool-cap pressure: Antigravity caps ~100 tools total across all configured MCP servers. **Live-confirmed 2026-06-10:** deploying javalens (75 tools) into an Antigravity with GitKraken (27 tools) already configured was hard-rejected — "Error: adding this instance with 75 enabled tools would exceed max limit of 100" — and the user had to disable GitKraken entirely to admit javalens. Antigravity additionally warns at >50 tools ("To optimize Agent, we recommend that up to 50 tools are enabled"), so even javalens alone sits permanently in the warning zone. The cap is enforced per-instance at add time, not gracefully degraded. javalens-mcp surface today:
 
 | Layer | Tool count |
 |---|---|
