@@ -5,71 +5,90 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.javalens.core.JdtServiceImpl;
 import org.javalens.mcp.fixtures.TestProjectHelper;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.tools.ExtractMethodTool;
+import org.javalens.mcp.tools.UndoRefactoringTool;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration tests for ExtractMethodTool.
- * Tests code block extraction to new method.
+ * Integration tests for ExtractMethodTool under the Sprint 14b auto-apply
+ * contract (temp fixture copy; on-disk verification; undo round-trip).
  */
 class ExtractMethodToolTest {
 
     @RegisterExtension
     TestProjectHelper helper = new TestProjectHelper();
 
+    private JdtServiceImpl service;
+    private RefactoringChangeCache cache;
     private ExtractMethodTool tool;
+    private UndoRefactoringTool undoTool;
     private ObjectMapper objectMapper;
-    private Path projectPath;
-    private String refactoringTargetPath;
+    private Path refactoringTargetFile;
 
     @BeforeEach
     void setUp() throws Exception {
-        JdtServiceImpl service = helper.loadProject("simple-maven");
-        tool = new ExtractMethodTool(() -> service);
+        service = helper.loadProjectCopy("simple-maven");
+        cache = new RefactoringChangeCache();
+        tool = new ExtractMethodTool(() -> service, cache);
+        undoTool = new UndoRefactoringTool(() -> service, cache);
         objectMapper = new ObjectMapper();
-        projectPath = helper.getFixturePath("simple-maven");
-        refactoringTargetPath = projectPath.resolve("src/main/java/com/example/RefactoringTarget.java").toString();
+        refactoringTargetFile = helper.getTempDirectory()
+            .resolve("simple-maven/src/main/java/com/example/RefactoringTarget.java");
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> getData(ToolResponse r) { return (Map<String, Object>) r.getData(); }
 
-    // ========== Comprehensive Functionality Tests ==========
-
-    @Test
-    @DisplayName("extracts code block to method with complete response")
-    void extractsCodeBlockWithCompleteResponse() {
+    private ObjectNode extractionArgs(String methodName) {
         ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
+        args.put("filePath", refactoringTargetFile.toString());
         args.put("startLine", 44);  // Start of sum calculation loop
         args.put("startColumn", 8);
         args.put("endLine", 47);    // End of loop
         args.put("endColumn", 9);
-        args.put("methodName", "calculateSum");
+        if (methodName != null) {
+            args.put("methodName", methodName);
+        }
+        return args;
+    }
 
-        ToolResponse response = tool.execute(args);
+    // ========== Auto-apply contract ==========
 
-        assertTrue(response.isSuccess());
+    @Test
+    @DisplayName("extracts code block to method on disk; undo restores the original")
+    void extractsCodeBlock_appliesAndUndoRestores() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
+
+        ToolResponse response = tool.execute(extractionArgs("calculateSum"));
+
+        assertTrue(response.isSuccess(), () -> String.valueOf(response.getError()));
         Map<String, Object> data = getData(response);
-
-        // Verify method info
+        assertEquals(Boolean.TRUE, data.get("applied"));
         assertEquals("calculateSum", data.get("methodName"));
         assertNotNull(data.get("parameters"));
         assertNotNull(data.get("returnType"));
-
-        // Verify edit structure
-        assertNotNull(data.get("newMethodCode"));
-        String declaration = (String) data.get("newMethodCode");
-        assertTrue(declaration.contains("calculateSum"));
         assertNotNull(data.get("methodCall"));
+        assertNotNull(data.get("undoChangeId"));
+
+        String onDisk = Files.readString(refactoringTargetFile);
+        assertTrue(onDisk.contains("calculateSum("),
+            "new method and its call must be on disk");
+        assertNotEquals(original, onDisk);
+
+        ToolResponse undone = undoTool.execute(objectMapper.createObjectNode()
+            .put("undoChangeId", (String) data.get("undoChangeId")));
+        assertTrue(undone.isSuccess(), () -> String.valueOf(undone.getError()));
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 
     // ========== Required Parameter Tests ==========
@@ -77,16 +96,7 @@ class ExtractMethodToolTest {
     @Test
     @DisplayName("requires methodName parameter")
     void requiresMethodName() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("startLine", 44);
-        args.put("startColumn", 8);
-        args.put("endLine", 47);
-        args.put("endColumn", 9);
-        // No methodName
-
-        ToolResponse response = tool.execute(args);
-
+        ToolResponse response = tool.execute(extractionArgs(null));
         assertFalse(response.isSuccess());
     }
 
@@ -108,38 +118,21 @@ class ExtractMethodToolTest {
     // ========== Error Handling Tests ==========
 
     @Test
-    @DisplayName("rejects invalid method names and reserved words")
-    void rejectsInvalidMethodNames() {
-        // Test invalid identifier (starts with number)
-        ObjectNode args1 = objectMapper.createObjectNode();
-        args1.put("filePath", refactoringTargetPath);
-        args1.put("startLine", 44);
-        args1.put("startColumn", 8);
-        args1.put("endLine", 47);
-        args1.put("endColumn", 9);
-        args1.put("methodName", "123invalid");
+    @DisplayName("rejects invalid method names and reserved words — without touching disk")
+    void rejectsInvalidMethodNames() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
 
-        ToolResponse response1 = tool.execute(args1);
-        assertFalse(response1.isSuccess());
+        assertFalse(tool.execute(extractionArgs("123invalid")).isSuccess());
+        assertFalse(tool.execute(extractionArgs("while")).isSuccess());
 
-        // Test reserved word
-        ObjectNode args2 = objectMapper.createObjectNode();
-        args2.put("filePath", refactoringTargetPath);
-        args2.put("startLine", 44);
-        args2.put("startColumn", 8);
-        args2.put("endLine", 47);
-        args2.put("endColumn", 9);
-        args2.put("methodName", "while");
-
-        ToolResponse response2 = tool.execute(args2);
-        assertFalse(response2.isSuccess());
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 
     @Test
     @DisplayName("handles invalid range gracefully")
     void handlesInvalidRange() {
         ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
+        args.put("filePath", refactoringTargetFile.toString());
         args.put("startLine", -1);
         args.put("startColumn", -1);
         args.put("endLine", -1);

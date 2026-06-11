@@ -22,10 +22,14 @@ import org.eclipse.jdt.core.dom.ReturnStatement;
 import org.eclipse.jdt.core.dom.SimpleName;
 import org.eclipse.jdt.core.dom.SingleVariableDeclaration;
 import org.eclipse.jdt.core.dom.Statement;
-import org.eclipse.jdt.core.dom.ThisExpression;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.text.edits.ReplaceEdit;
+import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
-import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.ChangeEngine;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,13 +43,17 @@ import java.util.function.Supplier;
 
 /**
  * Inline a method call by replacing it with the method body.
+ *
+ * <p>Sprint 14b: auto-applies by default via
+ * {@link AbstractApplyingRefactoringTool}.</p>
  */
-public class InlineMethodTool extends AbstractTool {
+public class InlineMethodTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(InlineMethodTool.class);
 
-    public InlineMethodTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public InlineMethodTool(Supplier<IJdtService> serviceSupplier,
+                            RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -58,11 +66,13 @@ public class InlineMethodTool extends AbstractTool {
         return """
             Inline a method call by replacing it with the method body.
 
-            Returns the text edit needed to inline the method call.
-            The caller should apply this edit to perform the inlining.
+            Applies the inlining directly (default) and returns
+            { filesModified, diff, undoChangeId, summary }. Verify with
+            compile_workspace; revert with undo_refactoring(undoChangeId).
+            Pass auto_apply: false to stage instead — returns { changeId, diff }.
 
             USAGE: Position cursor on a method call
-            OUTPUT: Edit to replace call with method body
+            OUTPUT: Modified file + unified diff + undo handle
 
             IMPORTANT: Uses ZERO-BASED coordinates.
 
@@ -94,192 +104,175 @@ public class InlineMethodTool extends AbstractTool {
             )
         ));
         schema.put("required", List.of("filePath", "line", "column"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
-    protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
+    protected Preparation prepareChange(IJdtService service, JsonNode arguments) throws Exception {
         String filePath = getStringParam(arguments, "filePath");
         if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("filePath", "Required"));
         }
 
         int line = getIntParam(arguments, "line", -1);
         int column = getIntParam(arguments, "column", -1);
 
         if (line < 0 || column < 0) {
-            return ToolResponse.invalidParameter("line/column", "Must be >= 0");
+            return Preparation.fail(ToolResponse.invalidParameter("line/column", "Must be >= 0"));
         }
 
-        try {
-            Path path = Path.of(filePath);
-            ICompilationUnit cu = service.getCompilationUnit(path);
-            if (cu == null) {
-                return ToolResponse.fileNotFound(filePath);
-            }
-
-            // Parse to AST with bindings
-            ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
-            parser.setSource(cu);
-            parser.setResolveBindings(true);
-            parser.setBindingsRecovery(true);
-            CompilationUnit ast = (CompilationUnit) parser.createAST(null);
-
-            // Calculate offset
-            int offset = ast.getPosition(line + 1, column);
-            if (offset < 0) {
-                return ToolResponse.invalidParameter("position", "Invalid position");
-            }
-
-            // Find the method invocation at this position
-            NodeFinder finder = new NodeFinder(ast, offset, 0);
-            ASTNode node = finder.getCoveringNode();
-
-            MethodInvocation invocation = findMethodInvocation(node);
-            if (invocation == null) {
-                return ToolResponse.invalidParameter("position",
-                    "No method call found at position");
-            }
-
-            // Resolve the method binding
-            IMethodBinding methodBinding = invocation.resolveMethodBinding();
-            if (methodBinding == null) {
-                return ToolResponse.invalidParameter("method",
-                    "Cannot resolve method binding");
-            }
-
-            // Get the method declaration source
-            IJavaElement javaElement = methodBinding.getJavaElement();
-            if (!(javaElement instanceof IMethod method)) {
-                return ToolResponse.invalidParameter("method",
-                    "Cannot find method element");
-            }
-
-            // Check if we have source for this method
-            ISourceRange sourceRange = method.getSourceRange();
-            if (sourceRange == null || sourceRange.getOffset() < 0) {
-                return ToolResponse.invalidParameter("method",
-                    "Method source not available (may be from a library)");
-            }
-
-            // Get the compilation unit containing the method
-            ICompilationUnit methodCu = method.getCompilationUnit();
-            if (methodCu == null) {
-                return ToolResponse.invalidParameter("method",
-                    "Cannot find compilation unit for method");
-            }
-
-            // Parse the method's compilation unit
-            ASTParser methodParser = ASTParser.newParser(AST.getJLSLatest());
-            methodParser.setSource(methodCu);
-            methodParser.setResolveBindings(true);
-            methodParser.setBindingsRecovery(true);
-            CompilationUnit methodAst = (CompilationUnit) methodParser.createAST(null);
-
-            // Find the method declaration
-            MethodDeclaration methodDecl = findMethodDeclaration(methodAst, method);
-            if (methodDecl == null) {
-                return ToolResponse.invalidParameter("method",
-                    "Cannot find method declaration in AST");
-            }
-
-            // Get the method body
-            Block body = methodDecl.getBody();
-            if (body == null) {
-                return ToolResponse.invalidParameter("method",
-                    "Method has no body (abstract or native method)");
-            }
-
-            // Check for 'this' references
-            if (usesThisExpression(methodDecl) && invocation.getExpression() == null) {
-                // 'this' in method body refers to the same 'this' as caller - OK
-            }
-
-            // Build parameter substitution map
-            @SuppressWarnings("unchecked")
-            List<SingleVariableDeclaration> params = methodDecl.parameters();
-            @SuppressWarnings("unchecked")
-            List<Expression> args = invocation.arguments();
-
-            if (params.size() != args.size()) {
-                return ToolResponse.invalidParameter("method",
-                    "Parameter/argument count mismatch");
-            }
-
-            Map<String, String> paramSubstitutions = new HashMap<>();
-            for (int i = 0; i < params.size(); i++) {
-                String paramName = params.get(i).getName().getIdentifier();
-                String argText = args.get(i).toString();
-                paramSubstitutions.put(paramName, argText);
-            }
-
-            // Build the inlined code
-            String inlinedCode = buildInlinedCode(body, paramSubstitutions, invocation, cu);
-
-            // Determine what to replace
-            // If the invocation is the whole statement, replace the statement
-            // If it's part of an expression (e.g., assignment), just replace the invocation
-
-            ASTNode parent = invocation.getParent();
-            ASTNode nodeToReplace;
-            boolean isExpressionContext;
-
-            if (parent instanceof ExpressionStatement) {
-                nodeToReplace = parent;
-                isExpressionContext = false;
-            } else {
-                nodeToReplace = invocation;
-                isExpressionContext = true;
-            }
-
-            // Build edit
-            List<Map<String, Object>> edits = new ArrayList<>();
-            Map<String, Object> replaceEdit = new LinkedHashMap<>();
-            replaceEdit.put("type", "replace");
-            replaceEdit.put("startLine", ast.getLineNumber(nodeToReplace.getStartPosition()) - 1);
-            replaceEdit.put("startColumn", ast.getColumnNumber(nodeToReplace.getStartPosition()));
-            replaceEdit.put("endLine", ast.getLineNumber(nodeToReplace.getStartPosition() + nodeToReplace.getLength()) - 1);
-            replaceEdit.put("endColumn", ast.getColumnNumber(nodeToReplace.getStartPosition() + nodeToReplace.getLength()));
-            replaceEdit.put("startOffset", nodeToReplace.getStartPosition());
-            replaceEdit.put("endOffset", nodeToReplace.getStartPosition() + nodeToReplace.getLength());
-            replaceEdit.put("oldText", getNodeText(cu, nodeToReplace));
-            replaceEdit.put("newText", inlinedCode);
-            edits.add(replaceEdit);
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("filePath", service.getPathUtils().formatPath(path));
-            data.put("methodName", method.getElementName());
-            data.put("methodClass", method.getDeclaringType().getElementName());
-            data.put("parameterCount", params.size());
-            data.put("isExpressionContext", isExpressionContext);
-            data.put("inlinedCode", inlinedCode);
-            data.put("edits", edits);
-
-            // Add warnings if applicable
-            List<String> warnings = new ArrayList<>();
-            @SuppressWarnings("unchecked")
-            List<Statement> statements = body.statements();
-            if (statements.size() > 1) {
-                warnings.add("Method has multiple statements - review inlined code carefully");
-            }
-            if (countReturnStatements(body) > 1) {
-                warnings.add("Method has multiple return statements - review needed");
-            }
-            if (!warnings.isEmpty()) {
-                data.put("warnings", warnings);
-            }
-
-            return ToolResponse.success(data, ResponseMeta.builder()
-                .suggestedNextTools(List.of(
-                    "Apply the text edit to complete the inlining",
-                    "get_diagnostics to verify no errors"
-                ))
-                .build());
-
-        } catch (Exception e) {
-            log.error("Error inlining method: {}", e.getMessage(), e);
-            return ToolResponse.internalError(e);
+        Path path = Path.of(filePath);
+        ICompilationUnit cu = service.getCompilationUnit(path);
+        if (cu == null) {
+            return Preparation.fail(ToolResponse.fileNotFound(filePath));
         }
+
+        // Parse to AST with bindings
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+        parser.setSource(cu);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+
+        // Calculate offset
+        int offset = ast.getPosition(line + 1, column);
+        if (offset < 0) {
+            return Preparation.fail(ToolResponse.invalidParameter("position", "Invalid position"));
+        }
+
+        // Find the method invocation at this position
+        NodeFinder finder = new NodeFinder(ast, offset, 0);
+        ASTNode node = finder.getCoveringNode();
+
+        MethodInvocation invocation = findMethodInvocation(node);
+        if (invocation == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("position",
+                "No method call found at position"));
+        }
+
+        // Resolve the method binding
+        IMethodBinding methodBinding = invocation.resolveMethodBinding();
+        if (methodBinding == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("method",
+                "Cannot resolve method binding"));
+        }
+
+        // Get the method declaration source
+        IJavaElement javaElement = methodBinding.getJavaElement();
+        if (!(javaElement instanceof IMethod method)) {
+            return Preparation.fail(ToolResponse.invalidParameter("method",
+                "Cannot find method element"));
+        }
+
+        // Check if we have source for this method
+        ISourceRange sourceRange = method.getSourceRange();
+        if (sourceRange == null || sourceRange.getOffset() < 0) {
+            return Preparation.fail(ToolResponse.invalidParameter("method",
+                "Method source not available (may be from a library)"));
+        }
+
+        // Get the compilation unit containing the method
+        ICompilationUnit methodCu = method.getCompilationUnit();
+        if (methodCu == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("method",
+                "Cannot find compilation unit for method"));
+        }
+
+        // Parse the method's compilation unit
+        ASTParser methodParser = ASTParser.newParser(AST.getJLSLatest());
+        methodParser.setSource(methodCu);
+        methodParser.setResolveBindings(true);
+        methodParser.setBindingsRecovery(true);
+        CompilationUnit methodAst = (CompilationUnit) methodParser.createAST(null);
+
+        // Find the method declaration
+        MethodDeclaration methodDecl = findMethodDeclaration(methodAst, method);
+        if (methodDecl == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("method",
+                "Cannot find method declaration in AST"));
+        }
+
+        // Get the method body
+        Block body = methodDecl.getBody();
+        if (body == null) {
+            return Preparation.fail(ToolResponse.invalidParameter("method",
+                "Method has no body (abstract or native method)"));
+        }
+
+        // Build parameter substitution map
+        @SuppressWarnings("unchecked")
+        List<SingleVariableDeclaration> params = methodDecl.parameters();
+        @SuppressWarnings("unchecked")
+        List<Expression> args = invocation.arguments();
+
+        if (params.size() != args.size()) {
+            return Preparation.fail(ToolResponse.invalidParameter("method",
+                "Parameter/argument count mismatch"));
+        }
+
+        Map<String, String> paramSubstitutions = new HashMap<>();
+        for (int i = 0; i < params.size(); i++) {
+            String paramName = params.get(i).getName().getIdentifier();
+            String argText = args.get(i).toString();
+            paramSubstitutions.put(paramName, argText);
+        }
+
+        // Build the inlined code
+        String inlinedCode = buildInlinedCode(body, paramSubstitutions, invocation, cu);
+
+        // Determine what to replace
+        // If the invocation is the whole statement, replace the statement
+        // If it's part of an expression (e.g., assignment), just replace the invocation
+
+        ASTNode parent = invocation.getParent();
+        ASTNode nodeToReplace;
+        boolean isExpressionContext;
+
+        if (parent instanceof ExpressionStatement) {
+            nodeToReplace = parent;
+            isExpressionContext = false;
+            // Replacing a whole statement: the inlined expression needs its
+            // own terminating semicolon or the applied file won't parse.
+            if (!inlinedCode.endsWith(";") && !inlinedCode.endsWith("}")) {
+                inlinedCode = inlinedCode + ";";
+            }
+        } else {
+            nodeToReplace = invocation;
+            isExpressionContext = true;
+        }
+
+        List<TextEdit> edits = new ArrayList<>();
+        edits.add(new ReplaceEdit(
+            nodeToReplace.getStartPosition(), nodeToReplace.getLength(), inlinedCode));
+
+        IFile file = (IFile) cu.getResource();
+        Change change = ChangeEngine.fromFileEdits(
+            "inline method " + method.getElementName(), Map.of(file, edits));
+
+        Map<String, Object> extras = new LinkedHashMap<>();
+        extras.put("filePath", service.getPathUtils().formatPath(path));
+        extras.put("methodName", method.getElementName());
+        extras.put("methodClass", method.getDeclaringType().getElementName());
+        extras.put("parameterCount", params.size());
+        extras.put("isExpressionContext", isExpressionContext);
+        extras.put("inlinedCode", inlinedCode);
+
+        List<String> warnings = new ArrayList<>();
+        @SuppressWarnings("unchecked")
+        List<Statement> statements = body.statements();
+        if (statements.size() > 1) {
+            warnings.add("Method has multiple statements - review inlined code carefully");
+        }
+        if (countReturnStatements(body) > 1) {
+            warnings.add("Method has multiple return statements - review needed");
+        }
+        if (!warnings.isEmpty()) {
+            extras.put("warnings", warnings);
+        }
+
+        String summary = "inline method " + method.getElementName()
+            + " at " + service.getPathUtils().formatPath(path);
+        return Preparation.of(change, summary, extras);
     }
 
     private MethodInvocation findMethodInvocation(ASTNode node) {
@@ -322,20 +315,6 @@ public class InlineMethodTool extends AbstractTool {
         }
 
         return result[0];
-    }
-
-    private boolean usesThisExpression(MethodDeclaration method) {
-        final boolean[] usesThis = {false};
-
-        method.accept(new ASTVisitor() {
-            @Override
-            public boolean visit(ThisExpression node) {
-                usesThis[0] = true;
-                return false;
-            }
-        });
-
-        return usesThis[0];
     }
 
     private int countReturnStatements(Block body) {
@@ -445,17 +424,4 @@ public class InlineMethodTool extends AbstractTool {
                nodeType == ASTNode.CAST_EXPRESSION;
     }
 
-    private String getNodeText(ICompilationUnit cu, ASTNode node) {
-        try {
-            String source = cu.getSource();
-            if (source != null) {
-                int start = node.getStartPosition();
-                int end = start + node.getLength();
-                return source.substring(start, end);
-            }
-        } catch (JavaModelException e) {
-            log.debug("Error getting node text: {}", e.getMessage());
-        }
-        return "";
-    }
 }

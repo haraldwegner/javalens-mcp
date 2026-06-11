@@ -2,7 +2,6 @@ package org.javalens.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.eclipse.jdt.core.ICompilationUnit;
-import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTParser;
 import org.eclipse.jdt.core.dom.ASTVisitor;
@@ -16,9 +15,15 @@ import org.eclipse.jdt.core.dom.SimpleName;
 import org.eclipse.jdt.core.dom.SingleVariableDeclaration;
 import org.eclipse.jdt.core.dom.TypeDeclaration;
 import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.text.edits.InsertEdit;
+import org.eclipse.text.edits.ReplaceEdit;
+import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
-import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.ChangeEngine;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,8 +39,11 @@ import java.util.function.Supplier;
 
 /**
  * Extract a code block into a new method.
+ *
+ * <p>Sprint 14b: auto-applies by default via
+ * {@link AbstractApplyingRefactoringTool}.</p>
  */
-public class ExtractMethodTool extends AbstractTool {
+public class ExtractMethodTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(ExtractMethodTool.class);
 
@@ -49,8 +57,9 @@ public class ExtractMethodTool extends AbstractTool {
         "try", "void", "volatile", "while", "true", "false", "null"
     );
 
-    public ExtractMethodTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public ExtractMethodTool(Supplier<IJdtService> serviceSupplier,
+                             RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -63,8 +72,13 @@ public class ExtractMethodTool extends AbstractTool {
         return """
             Extract a code block into a new method.
 
+            Applies the extraction directly (default) and returns
+            { filesModified, diff, undoChangeId, summary }. Verify with
+            compile_workspace; revert with undo_refactoring(undoChangeId).
+            Pass auto_apply: false to stage instead — returns { changeId, diff }.
+
             USAGE: Select code range, provide method name
-            OUTPUT: Text edits for method declaration and call site
+            OUTPUT: Modified file + unified diff + undo handle
 
             The tool analyzes the selected code to:
             - Determine which variables become parameters
@@ -108,14 +122,14 @@ public class ExtractMethodTool extends AbstractTool {
             )
         ));
         schema.put("required", List.of("filePath", "startLine", "startColumn", "endLine", "endColumn", "methodName"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
-    protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
+    protected Preparation prepareChange(IJdtService service, JsonNode arguments) throws Exception {
         String filePath = getStringParam(arguments, "filePath");
         if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("filePath", "Required"));
         }
 
         int startLine = getIntParam(arguments, "startLine", -1);
@@ -125,55 +139,59 @@ public class ExtractMethodTool extends AbstractTool {
         String methodName = getStringParam(arguments, "methodName");
 
         if (startLine < 0 || startColumn < 0 || endLine < 0 || endColumn < 0) {
-            return ToolResponse.invalidParameter("positions", "All positions must be >= 0");
+            return Preparation.fail(
+                ToolResponse.invalidParameter("positions", "All positions must be >= 0"));
         }
 
         if (methodName == null || methodName.isBlank()) {
-            return ToolResponse.invalidParameter("methodName", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("methodName", "Required"));
         }
 
         if (!isValidJavaIdentifier(methodName)) {
-            return ToolResponse.invalidParameter("methodName", "Not a valid Java identifier");
+            return Preparation.fail(
+                ToolResponse.invalidParameter("methodName", "Not a valid Java identifier"));
         }
 
-        try {
-            Path path = Path.of(filePath);
-            ICompilationUnit cu = service.getCompilationUnit(path);
-            if (cu == null) {
-                return ToolResponse.fileNotFound(filePath);
-            }
+        Path path = Path.of(filePath);
+        ICompilationUnit cu = service.getCompilationUnit(path);
+        if (cu == null) {
+            return Preparation.fail(ToolResponse.fileNotFound(filePath));
+        }
 
-            String source = cu.getSource();
-            if (source == null) {
-                return ToolResponse.internalError("Cannot read source");
-            }
+        String source = cu.getSource();
+        if (source == null) {
+            return Preparation.fail(ToolResponse.internalError("Cannot read source"));
+        }
 
-            // Parse to AST with bindings
-            ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
-            parser.setSource(cu);
-            parser.setResolveBindings(true);
-            parser.setBindingsRecovery(true);
-            CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+        // Parse to AST with bindings
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+        parser.setSource(cu);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        CompilationUnit ast = (CompilationUnit) parser.createAST(null);
 
-            // Calculate offsets
-            int startOffset = ast.getPosition(startLine + 1, startColumn);
-            int endOffset = ast.getPosition(endLine + 1, endColumn);
+        // Calculate offsets
+        int startOffset = ast.getPosition(startLine + 1, startColumn);
+        int endOffset = ast.getPosition(endLine + 1, endColumn);
 
-            if (startOffset < 0 || endOffset < 0 || startOffset >= endOffset) {
-                return ToolResponse.invalidParameter("positions", "Invalid selection range");
-            }
+        if (startOffset < 0 || endOffset < 0 || startOffset >= endOffset) {
+            return Preparation.fail(
+                ToolResponse.invalidParameter("positions", "Invalid selection range"));
+        }
 
-            // Find the containing method
-            MethodDeclaration containingMethod = findContainingMethod(ast, startOffset);
-            if (containingMethod == null) {
-                return ToolResponse.invalidParameter("selection", "Selection must be inside a method body");
-            }
+        // Find the containing method
+        MethodDeclaration containingMethod = findContainingMethod(ast, startOffset);
+        if (containingMethod == null) {
+            return Preparation.fail(
+                ToolResponse.invalidParameter("selection", "Selection must be inside a method body"));
+        }
 
-            // Find the containing type
-            TypeDeclaration containingType = findContainingType(ast, startOffset);
-            if (containingType == null) {
-                return ToolResponse.invalidParameter("selection", "Cannot find containing type");
-            }
+        // Find the containing type
+        TypeDeclaration containingType = findContainingType(ast, startOffset);
+        if (containingType == null) {
+            return Preparation.fail(
+                ToolResponse.invalidParameter("selection", "Cannot find containing type"));
+        }
 
             // Get the selected source code
             String selectedCode = source.substring(startOffset, endOffset).trim();
@@ -230,61 +248,36 @@ public class ExtractMethodTool extends AbstractTool {
             methodCall.append(String.join(", ", paramNames));
             methodCall.append(");");
 
-            // Calculate insertion point for new method
-            int insertOffset = containingMethod.getStartPosition() + containingMethod.getLength();
-            int insertLine = ast.getLineNumber(insertOffset) - 1;
+        // Calculate insertion point for new method
+        int insertOffset = containingMethod.getStartPosition() + containingMethod.getLength();
 
-            // Build edits
-            List<Map<String, Object>> edits = new ArrayList<>();
+        // Build JDT edits: new method inserted after the containing method,
+        // selection replaced by the call.
+        List<TextEdit> edits = new ArrayList<>();
+        edits.add(new InsertEdit(insertOffset, newMethod.toString()));
+        edits.add(new ReplaceEdit(startOffset, endOffset - startOffset, methodCall.toString()));
 
-            // Edit 1: Insert new method
-            Map<String, Object> insertEdit = new LinkedHashMap<>();
-            insertEdit.put("type", "insert");
-            insertEdit.put("line", insertLine);
-            insertEdit.put("offset", insertOffset);
-            insertEdit.put("newText", newMethod.toString());
-            edits.add(insertEdit);
+        IFile file = (IFile) cu.getResource();
+        Change change = ChangeEngine.fromFileEdits(
+            "extract method " + methodName, Map.of(file, edits));
 
-            // Edit 2: Replace selection with method call
-            Map<String, Object> replaceEdit = new LinkedHashMap<>();
-            replaceEdit.put("type", "replace");
-            replaceEdit.put("startLine", startLine);
-            replaceEdit.put("startColumn", startColumn);
-            replaceEdit.put("endLine", endLine);
-            replaceEdit.put("endColumn", endColumn);
-            replaceEdit.put("startOffset", startOffset);
-            replaceEdit.put("endOffset", endOffset);
-            replaceEdit.put("oldText", selectedCode);
-            replaceEdit.put("newText", methodCall.toString());
-            edits.add(replaceEdit);
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("filePath", service.getPathUtils().formatPath(path));
-            data.put("methodName", methodName);
-            data.put("returnType", returnType);
-            data.put("parameters", analysis.parameters.stream()
-                .map(p -> Map.of("name", p.name, "type", p.type))
-                .toList());
-            data.put("newMethodCode", newMethod.toString().trim());
-            data.put("methodCall", methodCall.toString());
-            data.put("edits", edits);
-
-            if (analysis.modifiedAndUsedAfter.size() > 1) {
-                data.put("warning", "Multiple variables are modified and used after selection. " +
-                    "Consider extracting smaller pieces or using a result object.");
-            }
-
-            return ToolResponse.success(data, ResponseMeta.builder()
-                .suggestedNextTools(List.of(
-                    "Apply the text edits to complete the extraction",
-                    "get_diagnostics to verify no errors"
-                ))
-                .build());
-
-        } catch (Exception e) {
-            log.error("Error extracting method: {}", e.getMessage(), e);
-            return ToolResponse.internalError(e);
+        Map<String, Object> extras = new LinkedHashMap<>();
+        extras.put("filePath", service.getPathUtils().formatPath(path));
+        extras.put("methodName", methodName);
+        extras.put("returnType", returnType);
+        extras.put("parameters", analysis.parameters.stream()
+            .map(p -> Map.of("name", p.name, "type", p.type))
+            .toList());
+        extras.put("newMethodCode", newMethod.toString().trim());
+        extras.put("methodCall", methodCall.toString());
+        if (analysis.modifiedAndUsedAfter.size() > 1) {
+            extras.put("warning", "Multiple variables are modified and used after selection. " +
+                "Consider extracting smaller pieces or using a result object.");
         }
+
+        String summary = "extract method private " + returnType + " " + methodName
+            + "(" + params + ")";
+        return Preparation.of(change, summary, extras);
     }
 
     private MethodDeclaration findContainingMethod(CompilationUnit ast, int offset) {

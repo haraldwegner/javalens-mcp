@@ -5,74 +5,85 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.javalens.core.JdtServiceImpl;
 import org.javalens.mcp.fixtures.TestProjectHelper;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.tools.InlineMethodTool;
+import org.javalens.mcp.tools.UndoRefactoringTool;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration tests for InlineMethodTool.
- * Tests method call inlining by replacing call with method body.
+ * Integration tests for InlineMethodTool under the Sprint 14b auto-apply
+ * contract (temp fixture copy; on-disk verification; undo round-trip).
  */
 class InlineMethodToolTest {
 
     @RegisterExtension
     TestProjectHelper helper = new TestProjectHelper();
 
+    private JdtServiceImpl service;
+    private RefactoringChangeCache cache;
     private InlineMethodTool tool;
+    private UndoRefactoringTool undoTool;
     private ObjectMapper objectMapper;
-    private Path projectPath;
-    private String refactoringTargetPath;
+    private Path refactoringTargetFile;
 
     @BeforeEach
     void setUp() throws Exception {
-        JdtServiceImpl service = helper.loadProject("simple-maven");
-        tool = new InlineMethodTool(() -> service);
+        service = helper.loadProjectCopy("simple-maven");
+        cache = new RefactoringChangeCache();
+        tool = new InlineMethodTool(() -> service, cache);
+        undoTool = new UndoRefactoringTool(() -> service, cache);
         objectMapper = new ObjectMapper();
-        projectPath = helper.getFixturePath("simple-maven");
-        refactoringTargetPath = projectPath.resolve("src/main/java/com/example/RefactoringTarget.java").toString();
+        refactoringTargetFile = helper.getTempDirectory()
+            .resolve("simple-maven/src/main/java/com/example/RefactoringTarget.java");
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> getData(ToolResponse r) { return (Map<String, Object>) r.getData(); }
 
-    // ========== Comprehensive Functionality Tests ==========
+    private ObjectNode args(int line, int column) {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", refactoringTargetFile.toString());
+        args.put("line", line);
+        args.put("column", column);
+        return args;
+    }
+
+    // ========== Auto-apply contract ==========
 
     @Test
-    @DisplayName("inlines method call with complete response including edit details")
-    void inlinesMethodCallWithCompleteResponse() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 64);  // int doubled = doubleValue(x);
-        args.put("column", 22);
+    @DisplayName("inlines method call on disk; undo restores the original")
+    void inlinesMethodCall_appliesAndUndoRestores() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
 
-        ToolResponse response = tool.execute(args);
+        ToolResponse response = tool.execute(args(64, 22)); // int doubled = doubleValue(x);
 
-        assertTrue(response.isSuccess());
+        assertTrue(response.isSuccess(), () -> String.valueOf(response.getError()));
         Map<String, Object> data = getData(response);
-
-        // Verify method info
+        assertEquals(Boolean.TRUE, data.get("applied"));
         assertEquals("doubleValue", data.get("methodName"));
         assertNotNull(data.get("methodClass"));
+        assertNotNull(data.get("undoChangeId"));
 
-        // Verify edit structure
-        assertNotNull(data.get("edits"));
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> edits = (List<Map<String, Object>>) data.get("edits");
-        assertFalse(edits.isEmpty());
-        Map<String, Object> edit = edits.get(0);
-        assertNotNull(edit.get("newText"));
+        String inlinedCode = (String) data.get("inlinedCode");
+        assertTrue(inlinedCode.contains("x") || inlinedCode.contains("*"),
+            "inlined code must come from the method body: " + inlinedCode);
 
-        // The inlined code should contain the multiplication
-        String newText = (String) edit.get("newText");
-        assertTrue(newText.contains("x") || newText.contains("*"));
+        String onDisk = Files.readString(refactoringTargetFile);
+        assertNotEquals(original, onDisk, "inlined call must be on disk");
+
+        ToolResponse undone = undoTool.execute(objectMapper.createObjectNode()
+            .put("undoChangeId", (String) data.get("undoChangeId")));
+        assertTrue(undone.isSuccess(), () -> String.valueOf(undone.getError()));
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 
     // ========== Required Parameter Tests ==========
@@ -92,35 +103,29 @@ class InlineMethodToolTest {
     @Test
     @DisplayName("requires line and column parameters")
     void requiresLineAndColumn() {
-        // Missing line
         ObjectNode args1 = objectMapper.createObjectNode();
-        args1.put("filePath", refactoringTargetPath);
+        args1.put("filePath", refactoringTargetFile.toString());
         args1.put("column", 22);
 
-        ToolResponse response1 = tool.execute(args1);
-        assertFalse(response1.isSuccess());
+        assertFalse(tool.execute(args1).isSuccess());
 
-        // Missing column
         ObjectNode args2 = objectMapper.createObjectNode();
-        args2.put("filePath", refactoringTargetPath);
+        args2.put("filePath", refactoringTargetFile.toString());
         args2.put("line", 64);
 
-        ToolResponse response2 = tool.execute(args2);
-        assertFalse(response2.isSuccess());
+        assertFalse(tool.execute(args2).isSuccess());
     }
 
     // ========== Error Handling Tests ==========
 
     @Test
-    @DisplayName("handles non-method call position gracefully")
-    void handlesNotAMethodCall() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 15);  // Field declaration
-        args.put("column", 19);
+    @DisplayName("handles non-method call position gracefully — without touching disk")
+    void handlesNonMethodCallPosition() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
 
-        ToolResponse response = tool.execute(args);
+        ToolResponse response = tool.execute(args(15, 19)); // Field declaration
 
         assertFalse(response.isSuccess());
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 }

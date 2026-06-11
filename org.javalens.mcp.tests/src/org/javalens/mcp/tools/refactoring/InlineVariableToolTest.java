@@ -5,101 +5,103 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.javalens.core.JdtServiceImpl;
 import org.javalens.mcp.fixtures.TestProjectHelper;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.tools.InlineVariableTool;
+import org.javalens.mcp.tools.UndoRefactoringTool;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration tests for InlineVariableTool.
- * Tests variable inlining by replacing usages with initializer.
+ * Integration tests for InlineVariableTool under the Sprint 14b auto-apply
+ * contract (temp fixture copy; on-disk verification; undo round-trip).
  */
 class InlineVariableToolTest {
 
     @RegisterExtension
     TestProjectHelper helper = new TestProjectHelper();
 
+    private JdtServiceImpl service;
+    private RefactoringChangeCache cache;
     private InlineVariableTool tool;
+    private UndoRefactoringTool undoTool;
     private ObjectMapper objectMapper;
-    private Path projectPath;
-    private String refactoringTargetPath;
+    private Path refactoringTargetFile;
 
     @BeforeEach
     void setUp() throws Exception {
-        JdtServiceImpl service = helper.loadProject("simple-maven");
-        tool = new InlineVariableTool(() -> service);
+        service = helper.loadProjectCopy("simple-maven");
+        cache = new RefactoringChangeCache();
+        tool = new InlineVariableTool(() -> service, cache);
+        undoTool = new UndoRefactoringTool(() -> service, cache);
         objectMapper = new ObjectMapper();
-        projectPath = helper.getFixturePath("simple-maven");
-        refactoringTargetPath = projectPath.resolve("src/main/java/com/example/RefactoringTarget.java").toString();
+        refactoringTargetFile = helper.getTempDirectory()
+            .resolve("simple-maven/src/main/java/com/example/RefactoringTarget.java");
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> getData(ToolResponse r) { return (Map<String, Object>) r.getData(); }
 
-    @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> getEdits(Map<String, Object> data) {
-        return (List<Map<String, Object>>) data.get("edits");
+    private ObjectNode args(int line, int column) {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", refactoringTargetFile.toString());
+        args.put("line", line);
+        args.put("column", column);
+        return args;
     }
 
-    // ========== Comprehensive Functionality Tests ==========
+    // ========== Auto-apply contract ==========
 
     @Test
-    @DisplayName("inlines variable with complete response including edits")
-    void inlinesVariableWithCompleteResponse() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 26);  // String trimmed = input.trim();
-        args.put("column", 15);
+    @DisplayName("inlines variable on disk; undo restores the original")
+    void inlinesVariable_appliesAndUndoRestores() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
 
-        ToolResponse response = tool.execute(args);
+        ToolResponse response = tool.execute(args(26, 15)); // String trimmed = input.trim();
 
-        assertTrue(response.isSuccess());
+        assertTrue(response.isSuccess(), () -> String.valueOf(response.getError()));
         Map<String, Object> data = getData(response);
-
-        // Verify variable info
+        assertEquals(Boolean.TRUE, data.get("applied"));
         assertEquals("trimmed", data.get("variableName"));
         assertNotNull(data.get("initializerText"));
-        assertNotNull(data.get("usageCount"));
+        assertTrue((int) data.get("usageCount") > 0);
+        assertNotNull(data.get("undoChangeId"));
 
-        // Verify edit structure
-        assertNotNull(data.get("edits"));
-        List<Map<String, Object>> edits = getEdits(data);
-        assertFalse(edits.isEmpty());
+        String onDisk = Files.readString(refactoringTargetFile);
+        assertFalse(onDisk.contains("String trimmed ="),
+            "declaration must be removed from disk");
+        assertNotEquals(original, onDisk);
+
+        ToolResponse undone = undoTool.execute(objectMapper.createObjectNode()
+            .put("undoChangeId", (String) data.get("undoChangeId")));
+        assertTrue(undone.isSuccess(), () -> String.valueOf(undone.getError()));
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 
     // ========== Safety Check Tests ==========
 
     @Test
-    @DisplayName("refuses to inline modified variable")
-    void refusesToInlineModifiedVariable() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 121);  // modifiedVariable method - value = 10; then value = value + 5;
-        args.put("column", 12);
+    @DisplayName("refuses to inline modified variable — without touching disk")
+    void refusesToInlineModifiedVariable() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
 
-        ToolResponse response = tool.execute(args);
+        ToolResponse response = tool.execute(args(121, 12)); // value reassigned later
 
-        // Should refuse because variable is modified after initialization
         assertFalse(response.isSuccess());
+        assertEquals(original, Files.readString(refactoringTargetFile));
     }
 
     @Test
     @DisplayName("refuses variable without initializer")
     void refusesVariableWithoutInitializer() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 130);  // noInitializer method - int value; (no initializer)
-        args.put("column", 12);
-
-        ToolResponse response = tool.execute(args);
-
+        ToolResponse response = tool.execute(args(130, 12)); // int value; (no initializer)
         assertFalse(response.isSuccess());
     }
 
@@ -122,7 +124,7 @@ class InlineVariableToolTest {
     void requiresLineAndColumn() {
         // Missing line
         ObjectNode args1 = objectMapper.createObjectNode();
-        args1.put("filePath", refactoringTargetPath);
+        args1.put("filePath", refactoringTargetFile.toString());
         args1.put("column", 15);
 
         ToolResponse response1 = tool.execute(args1);
@@ -130,7 +132,7 @@ class InlineVariableToolTest {
 
         // Missing column
         ObjectNode args2 = objectMapper.createObjectNode();
-        args2.put("filePath", refactoringTargetPath);
+        args2.put("filePath", refactoringTargetFile.toString());
         args2.put("line", 26);
 
         ToolResponse response2 = tool.execute(args2);
@@ -142,13 +144,7 @@ class InlineVariableToolTest {
     @Test
     @DisplayName("handles non-variable position gracefully")
     void handlesNotAVariable() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 24);  // Method declaration
-        args.put("column", 16);
-
-        ToolResponse response = tool.execute(args);
-
+        ToolResponse response = tool.execute(args(24, 16)); // Method declaration
         assertFalse(response.isSuccess());
     }
 }

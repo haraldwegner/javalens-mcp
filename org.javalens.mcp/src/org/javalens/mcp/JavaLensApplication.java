@@ -379,7 +379,7 @@ public class JavaLensApplication implements IApplication {
         toolRegistry.register(new RenameSymbolTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new OrganizeImportsTool(() -> jdtService));
         toolRegistry.register(new ExtractVariableTool(() -> jdtService, refactoringChangeCache));
-        toolRegistry.register(new ExtractMethodTool(() -> jdtService));
+        toolRegistry.register(new ExtractMethodTool(() -> jdtService, refactoringChangeCache));
 
         // Fine-grained reference search (JDT-unique capabilities).
         // Sprint 11 Phase D: 13 narrow find_* tools collapsed to 2 parametric ones.
@@ -401,8 +401,8 @@ public class JavaLensApplication implements IApplication {
 
         // Advanced refactoring tools
         toolRegistry.register(new ExtractConstantTool(() -> jdtService, refactoringChangeCache));
-        toolRegistry.register(new InlineVariableTool(() -> jdtService));
-        toolRegistry.register(new InlineMethodTool(() -> jdtService));
+        toolRegistry.register(new InlineVariableTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new InlineMethodTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new ChangeMethodSignatureTool(() -> jdtService));
         toolRegistry.register(new ExtractInterfaceTool(() -> jdtService));
         toolRegistry.register(new ConvertAnonymousToLambdaTool(() -> jdtService));

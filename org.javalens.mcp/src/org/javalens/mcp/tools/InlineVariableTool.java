@@ -2,7 +2,6 @@ package org.javalens.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.eclipse.jdt.core.ICompilationUnit;
-import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.ASTParser;
@@ -19,9 +18,15 @@ import org.eclipse.jdt.core.dom.SimpleName;
 import org.eclipse.jdt.core.dom.Statement;
 import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
 import org.eclipse.jdt.core.dom.VariableDeclarationStatement;
+import org.eclipse.core.resources.IFile;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.text.edits.DeleteEdit;
+import org.eclipse.text.edits.ReplaceEdit;
+import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
-import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.ChangeEngine;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,13 +39,17 @@ import java.util.function.Supplier;
 
 /**
  * Inline a local variable by replacing all usages with its initializer expression.
+ *
+ * <p>Sprint 14b: auto-applies by default via
+ * {@link AbstractApplyingRefactoringTool}.</p>
  */
-public class InlineVariableTool extends AbstractTool {
+public class InlineVariableTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(InlineVariableTool.class);
 
-    public InlineVariableTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public InlineVariableTool(Supplier<IJdtService> serviceSupplier,
+                              RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -53,11 +62,13 @@ public class InlineVariableTool extends AbstractTool {
         return """
             Inline a local variable by replacing all usages with its initializer expression.
 
-            Returns the text edits needed to inline the variable.
-            The caller should apply these edits to perform the inlining.
+            Applies the inlining directly (default) and returns
+            { filesModified, diff, undoChangeId, summary }. Verify with
+            compile_workspace; revert with undo_refactoring(undoChangeId).
+            Pass auto_apply: false to stage instead — returns { changeId, diff }.
 
             USAGE: Position cursor on variable declaration or usage
-            OUTPUT: Edits to delete declaration and replace usages with initializer
+            OUTPUT: Modified file + unified diff + undo handle
 
             IMPORTANT: Uses ZERO-BASED coordinates.
             SAFETY: Will refuse if variable is modified after initialization.
@@ -85,177 +96,147 @@ public class InlineVariableTool extends AbstractTool {
             )
         ));
         schema.put("required", List.of("filePath", "line", "column"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
-    protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
+    protected Preparation prepareChange(IJdtService service, JsonNode arguments) throws Exception {
         String filePath = getStringParam(arguments, "filePath");
         if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("filePath", "Required"));
         }
 
         int line = getIntParam(arguments, "line", -1);
         int column = getIntParam(arguments, "column", -1);
 
         if (line < 0 || column < 0) {
-            return ToolResponse.invalidParameter("line/column", "Must be >= 0");
+            return Preparation.fail(ToolResponse.invalidParameter("line/column", "Must be >= 0"));
         }
 
-        try {
-            Path path = Path.of(filePath);
-            ICompilationUnit cu = service.getCompilationUnit(path);
-            if (cu == null) {
-                return ToolResponse.fileNotFound(filePath);
-            }
-
-            // Parse to AST with bindings
-            ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
-            parser.setSource(cu);
-            parser.setResolveBindings(true);
-            parser.setBindingsRecovery(true);
-            CompilationUnit ast = (CompilationUnit) parser.createAST(null);
-
-            // Calculate offset
-            int offset = ast.getPosition(line + 1, column);
-            if (offset < 0) {
-                return ToolResponse.invalidParameter("position", "Invalid position");
-            }
-
-            // Find the node at this position
-            NodeFinder finder = new NodeFinder(ast, offset, 0);
-            ASTNode node = finder.getCoveringNode();
-
-            // Find the variable binding
-            IVariableBinding variableBinding = null;
-            VariableDeclarationFragment declarationFragment = null;
-
-            if (node instanceof SimpleName simpleName) {
-                if (simpleName.resolveBinding() instanceof IVariableBinding vb) {
-                    variableBinding = vb;
-                    // Find the declaration fragment
-                    if (simpleName.getParent() instanceof VariableDeclarationFragment vdf) {
-                        declarationFragment = vdf;
-                    }
-                }
-            } else if (node instanceof VariableDeclarationFragment vdf) {
-                declarationFragment = vdf;
-                variableBinding = vdf.resolveBinding();
-            }
-
-            if (variableBinding == null) {
-                return ToolResponse.symbolNotFound("No variable at position");
-            }
-
-            // Must be a local variable
-            if (!variableBinding.isParameter() && variableBinding.isField()) {
-                return ToolResponse.invalidParameter("variable", "Can only inline local variables, not fields");
-            }
-
-            if (variableBinding.isParameter()) {
-                return ToolResponse.invalidParameter("variable", "Cannot inline method parameters");
-            }
-
-            // Find the declaration if we don't have it yet
-            if (declarationFragment == null) {
-                declarationFragment = findDeclaration(ast, variableBinding);
-            }
-
-            if (declarationFragment == null) {
-                return ToolResponse.symbolNotFound("Cannot find variable declaration");
-            }
-
-            // Get the initializer expression
-            Expression initializer = declarationFragment.getInitializer();
-            if (initializer == null) {
-                return ToolResponse.invalidParameter("variable", "Variable has no initializer, cannot inline");
-            }
-
-            String variableName = declarationFragment.getName().getIdentifier();
-            String initializerText = initializer.toString();
-
-            // Find all usages of this variable
-            List<SimpleName> usages = findUsages(ast, variableBinding, declarationFragment);
-
-            if (usages.isEmpty()) {
-                return ToolResponse.invalidParameter("variable", "Variable has no usages to inline");
-            }
-
-            // Check if variable is modified after initialization
-            if (isModifiedAfterInit(ast, variableBinding, declarationFragment)) {
-                return ToolResponse.invalidParameter("variable",
-                    "Variable is modified after initialization, cannot safely inline");
-            }
-
-            // Build edits - sort by offset descending for safe application
-            List<Map<String, Object>> edits = new ArrayList<>();
-
-            // Collect all replacement edits first
-            for (SimpleName usage : usages) {
-                Map<String, Object> replaceEdit = new LinkedHashMap<>();
-                replaceEdit.put("type", "replace");
-                replaceEdit.put("line", ast.getLineNumber(usage.getStartPosition()) - 1);
-                replaceEdit.put("column", ast.getColumnNumber(usage.getStartPosition()));
-                replaceEdit.put("startOffset", usage.getStartPosition());
-                replaceEdit.put("endOffset", usage.getStartPosition() + usage.getLength());
-                replaceEdit.put("oldText", variableName);
-                // Wrap in parentheses if the initializer is complex
-                String replacement = needsParentheses(initializer, usage) ?
-                    "(" + initializerText + ")" : initializerText;
-                replaceEdit.put("newText", replacement);
-                edits.add(replaceEdit);
-            }
-
-            // Add delete edit for the declaration
-            Statement declarationStatement = findDeclarationStatement(declarationFragment);
-            if (declarationStatement != null) {
-                Map<String, Object> deleteEdit = new LinkedHashMap<>();
-                deleteEdit.put("type", "delete");
-                deleteEdit.put("line", ast.getLineNumber(declarationStatement.getStartPosition()) - 1);
-                deleteEdit.put("startOffset", declarationStatement.getStartPosition());
-                deleteEdit.put("endOffset", declarationStatement.getStartPosition() + declarationStatement.getLength());
-                deleteEdit.put("oldText", getStatementText(cu, declarationStatement));
-
-                // Check if there are other variables in this declaration
-                if (declarationStatement instanceof VariableDeclarationStatement vds) {
-                    @SuppressWarnings("unchecked")
-                    List<VariableDeclarationFragment> fragments = vds.fragments();
-                    if (fragments.size() > 1) {
-                        deleteEdit.put("note", "Declaration has multiple variables, only removing this one");
-                        // Would need more complex edit - for now just note it
-                    }
-                }
-
-                edits.add(deleteEdit);
-            }
-
-            // Sort edits by offset descending for safe application
-            edits.sort((a, b) -> {
-                int offsetA = (int) a.get("startOffset");
-                int offsetB = (int) b.get("startOffset");
-                return Integer.compare(offsetB, offsetA);
-            });
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("filePath", service.getPathUtils().formatPath(path));
-            data.put("variableName", variableName);
-            data.put("initializerText", initializerText);
-            data.put("usageCount", usages.size());
-            data.put("edits", edits);
-
-            return ToolResponse.success(data, ResponseMeta.builder()
-                .totalCount(usages.size())
-                .returnedCount(usages.size())
-                .suggestedNextTools(List.of(
-                    "Apply the text edits to complete the inlining",
-                    "get_diagnostics to verify no errors"
-                ))
-                .build());
-
-        } catch (Exception e) {
-            log.error("Error inlining variable: {}", e.getMessage(), e);
-            return ToolResponse.internalError(e);
+        Path path = Path.of(filePath);
+        ICompilationUnit cu = service.getCompilationUnit(path);
+        if (cu == null) {
+            return Preparation.fail(ToolResponse.fileNotFound(filePath));
         }
+
+        // Parse to AST with bindings
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+        parser.setSource(cu);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+
+        // Calculate offset
+        int offset = ast.getPosition(line + 1, column);
+        if (offset < 0) {
+            return Preparation.fail(ToolResponse.invalidParameter("position", "Invalid position"));
+        }
+
+        // Find the node at this position
+        NodeFinder finder = new NodeFinder(ast, offset, 0);
+        ASTNode node = finder.getCoveringNode();
+
+        // Find the variable binding
+        IVariableBinding variableBinding = null;
+        VariableDeclarationFragment declarationFragment = null;
+
+        if (node instanceof SimpleName simpleName) {
+            if (simpleName.resolveBinding() instanceof IVariableBinding vb) {
+                variableBinding = vb;
+                // Find the declaration fragment
+                if (simpleName.getParent() instanceof VariableDeclarationFragment vdf) {
+                    declarationFragment = vdf;
+                }
+            }
+        } else if (node instanceof VariableDeclarationFragment vdf) {
+            declarationFragment = vdf;
+            variableBinding = vdf.resolveBinding();
+        }
+
+        if (variableBinding == null) {
+            return Preparation.fail(ToolResponse.symbolNotFound("No variable at position"));
+        }
+
+        // Must be a local variable
+        if (!variableBinding.isParameter() && variableBinding.isField()) {
+            return Preparation.fail(ToolResponse.invalidParameter(
+                "variable", "Can only inline local variables, not fields"));
+        }
+
+        if (variableBinding.isParameter()) {
+            return Preparation.fail(ToolResponse.invalidParameter(
+                "variable", "Cannot inline method parameters"));
+        }
+
+        // Find the declaration if we don't have it yet
+        if (declarationFragment == null) {
+            declarationFragment = findDeclaration(ast, variableBinding);
+        }
+
+        if (declarationFragment == null) {
+            return Preparation.fail(ToolResponse.symbolNotFound("Cannot find variable declaration"));
+        }
+
+        // Get the initializer expression
+        Expression initializer = declarationFragment.getInitializer();
+        if (initializer == null) {
+            return Preparation.fail(ToolResponse.invalidParameter(
+                "variable", "Variable has no initializer, cannot inline"));
+        }
+
+        String variableName = declarationFragment.getName().getIdentifier();
+        String initializerText = initializer.toString();
+
+        // Find all usages of this variable
+        List<SimpleName> usages = findUsages(ast, variableBinding, declarationFragment);
+
+        if (usages.isEmpty()) {
+            return Preparation.fail(ToolResponse.invalidParameter(
+                "variable", "Variable has no usages to inline"));
+        }
+
+        // Check if variable is modified after initialization
+        if (isModifiedAfterInit(ast, variableBinding, declarationFragment)) {
+            return Preparation.fail(ToolResponse.invalidParameter("variable",
+                "Variable is modified after initialization, cannot safely inline"));
+        }
+
+        // Build JDT edits: every usage replaced by the (possibly
+        // parenthesised) initializer, declaration statement deleted.
+        List<TextEdit> edits = new ArrayList<>();
+        for (SimpleName usage : usages) {
+            String replacement = needsParentheses(initializer, usage)
+                ? "(" + initializerText + ")" : initializerText;
+            edits.add(new ReplaceEdit(usage.getStartPosition(), usage.getLength(), replacement));
+        }
+
+        String note = null;
+        Statement declarationStatement = findDeclarationStatement(declarationFragment);
+        if (declarationStatement != null) {
+            if (declarationStatement instanceof VariableDeclarationStatement vds
+                    && vds.fragments().size() > 1) {
+                note = "Declaration has multiple variables; the whole statement is removed";
+            }
+            edits.add(new DeleteEdit(
+                declarationStatement.getStartPosition(), declarationStatement.getLength()));
+        }
+
+        IFile file = (IFile) cu.getResource();
+        Change change = ChangeEngine.fromFileEdits(
+            "inline variable " + variableName, Map.of(file, edits));
+
+        Map<String, Object> extras = new LinkedHashMap<>();
+        extras.put("filePath", service.getPathUtils().formatPath(path));
+        extras.put("variableName", variableName);
+        extras.put("initializerText", initializerText);
+        extras.put("usageCount", usages.size());
+        if (note != null) {
+            extras.put("note", note);
+        }
+
+        String summary = "inline variable " + variableName + " = " + initializerText
+            + " (" + usages.size() + " usages)";
+        return Preparation.of(change, summary, extras);
     }
 
     private VariableDeclarationFragment findDeclaration(CompilationUnit ast, IVariableBinding binding) {
@@ -418,17 +399,4 @@ public class InlineVariableTool extends AbstractTool {
         return true; // Default to wrapping for safety
     }
 
-    private String getStatementText(ICompilationUnit cu, Statement statement) {
-        try {
-            String source = cu.getSource();
-            if (source != null) {
-                int start = statement.getStartPosition();
-                int end = start + statement.getLength();
-                return source.substring(start, end);
-            }
-        } catch (JavaModelException e) {
-            log.debug("Error getting statement text: {}", e.getMessage());
-        }
-        return "";
-    }
 }
