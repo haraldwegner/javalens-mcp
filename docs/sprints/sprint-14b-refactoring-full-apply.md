@@ -8,6 +8,10 @@
 > [`../upstream-parity-v1.4.2.md`](../upstream-parity-v1.4.2.md)).
 > Verification: full reactor 1448/0/0 + HTTP E2E smokes 18/18. Release notes:
 > [`../release-notes/v1.9.0.md`](../release-notes/v1.9.0.md).
+> **Live field acceptance 2026-06-11:** both residents reloaded onto v1.9.0
+> (79 tools); Cursor **Ask mode** executed `health_check` / `analyze_type` /
+> `find_references` with no non-readonly rejection — the readOnlyHint goal
+> confirmed end-to-end against the real workspace.
 >
 > **Status (historical): re-sequenced 2026-06-07.** Originally drafted as Sprint 14a. Re-sequenced to **Sprint 14b** after Sprint 14a was reassigned to HTTP/SSE transport (the architectural fix for manager bug #9's 30 GB JVM leak + the EXECSIM sandbox unblock + multi-client lock contention). This sprint absorbed the **upstream pzalutski v1.3.5 parity-audit sync** (previously [`sprint-future-upstream-parity-audit.md`](sprint-future-upstream-parity-audit.md), originally scoped as Sprint 15 Phase 0) into its scope — porting the upstream parity diff is small enough to bundle with the apply-policy retrofit.
 >
