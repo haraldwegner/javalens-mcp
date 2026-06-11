@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
 
-**75 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, LTK-backed structural refactorings, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
+**79 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, auto-applying refactorings with one-call undo, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection + removal — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
 
-Battle-tested daily on multi-project codebases via the companion **[javalens-manager](https://github.com/hw1964/javalens-manager)** desktop control plane. Improvement loop is live: features, fixes, and ergonomics ship in response to refactoring sessions in production. See the [roadmap](docs/sprints/) for what's coming and the [release notes](docs/release-notes/) for what just shipped.
+Battle-tested daily on multi-project codebases via the companion **[javalens-manager](https://github.com/haraldwegner/javalens-manager)** desktop control plane. Improvement loop is live: features, fixes, and ergonomics ship in response to refactoring sessions in production. See the [roadmap](docs/sprints/) for what's coming and the [release notes](docs/release-notes/) for what just shipped.
 
 ```bash
 # Linux — installs the manager (which pulls JavaLens automatically)
@@ -93,7 +93,7 @@ Two PDE bundles loaded into one workspace where bundle A's `Require-Bundle` list
 
 ### Tool-surface progression (v1.5.0 — v1.7.0)
 
-Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 75 in v1.8.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
+Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 75 in v1.8.0 → 79 in v1.9.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
 
 - **`find_pattern_usages(kind, query)`** — `kind ∈ { annotation, instantiation, type_argument, cast, instanceof }`.
 - **`find_quality_issue(kind, …)`** — `kind ∈ { naming, bugs, unused, large_classes, circular_deps, reflection, throws, catches }`.
@@ -112,7 +112,7 @@ Both declare typed `kind` enums in their schema with per-kind descriptions, so a
 | `push_down` | Move a method or field from a supertype into all of its direct subtypes. |
 | `encapsulate_field` | Generate getter/setter for a field, replace direct accesses, optionally tighten field visibility. |
 
-All accept the inherited optional `projectKey` for workspace-scoped refactorings. On rejection (`REFACTORING_FAILED`), no files are modified. See [`docs/release-notes/v1.5.1.md`](docs/release-notes/v1.5.1.md) and [`docs/upgrade-checklist.md`](docs/upgrade-checklist.md) — three of the five tools use `org.eclipse.jdt.internal.corext.*` processor classes; the upgrade checklist documents what to verify on Eclipse target-platform bumps.
+All accept the inherited optional `projectKey` for workspace-scoped refactorings. On rejection (`REFACTORING_FAILED`), no files are modified. Since v1.9.0 the undo-Change that `PerformChangeOperation` used to discard is captured and returned as `undoChangeId`, and `auto_apply: false` stages the LTK Change for preview-then-commit. See [`docs/release-notes/v1.5.1.md`](docs/release-notes/v1.5.1.md) and [`docs/upgrade-checklist.md`](docs/upgrade-checklist.md) — three of the five tools use `org.eclipse.jdt.internal.corext.*` processor classes; the upgrade checklist documents what to verify on Eclipse target-platform bumps.
 
 ### Workspace verification (v1.6.0)
 
@@ -163,7 +163,7 @@ See [`docs/release-notes/v1.8.0.md`](docs/release-notes/v1.8.0.md) for the full 
 
 ### Recommended: javalens-manager
 
-For day-to-day use, drive JavaLens through **[javalens-manager](https://github.com/hw1964/javalens-manager)** — a Tauri desktop app that:
+For day-to-day use, drive JavaLens through **[javalens-manager](https://github.com/haraldwegner/javalens-manager)** — a Tauri desktop app that:
 
 - Manages named workspaces of Java projects with a workspace-first UI.
 - Writes `workspace.json` for the file-watcher.
@@ -216,7 +216,7 @@ Multi-client benefit: when 3 Claude windows + Cursor connect to the same URL, th
 }
 ```
 
-Both transports expose the same 75 tools through the same JSON-RPC handler — only the wire differs.
+Both transports expose the same 79 tools through the same JSON-RPC handler — only the wire differs.
 
 Drop a `workspace.json` into `/path/to/javalens-workspaces/` to load projects:
 
@@ -232,7 +232,7 @@ The watcher loads them on startup and reconciles edits live. For single-project 
 
 ---
 
-## Tools (75 in v1.8.5)
+## Tools (79 in v1.9.0)
 
 ### Workspace administration (5)
 
@@ -262,11 +262,19 @@ The watcher loads them on startup and reconciles edits live. For single-project 
 
 `get_diagnostics`, `validate_syntax`, `get_call_hierarchy_incoming`, `get_call_hierarchy_outgoing`, `get_hover_info`, `get_javadoc`, `get_signature_help`, `get_enclosing_element`, `analyze_change_impact`, `analyze_data_flow`, `analyze_control_flow`, `get_di_registrations`, `analyze_file`, `analyze_type`, `analyze_method`, `get_type_usage_summary`.
 
-### Refactoring (15)
+### Refactoring (15 + 4 apply/undo primitives)
+
+**Since v1.9.0 every refactoring auto-applies** and returns
+`{ filesModified, diff, undoChangeId, summary }` — the agent's loop is
+*refactor → `compile_workspace` / run tests → keep, or `undo_refactoring`*.
+Pass `auto_apply: false` to stage instead (`{ changeId, diff }`) and commit later.
+The contract is a durable PR gate: [`docs/refactoring-tool-contract.md`](docs/refactoring-tool-contract.md).
 
 **Local:** `rename_symbol`, `organize_imports`, `extract_variable`, `extract_method`, `extract_constant`, `extract_interface`, `inline_variable`, `inline_method`, `change_method_signature`, `convert_anonymous_to_lambda`.
 
 **Structural (LTK-backed, v1.5.1):** `move_class`, `move_package`, `pull_up`, `push_down`, `encapsulate_field`.
+
+**Apply/undo primitives (v1.9.0):** `apply_refactoring`, `undo_refactoring`, `inspect_refactoring`, plus `replace_duplicates` — pass a stable `groupId` from `find_duplicate_code` and every same-type clone delegates to a canonical method, atomically with one undo handle.
 
 ### Verification (4)
 
@@ -414,9 +422,9 @@ When you change the Eclipse release the fork builds against (currently 2024-09),
                             │ JSON-RPC over stdio
 ┌─────────────────────────────────────────────────────────────────┐
 │  org.javalens.mcp                                               │
-│    JavaLensApplication → ToolRegistry → 75 tools                │
+│    JavaLensApplication → ToolRegistry → 79 tools                │
 │      • workspace admin · navigation · search · analysis         │
-│      • refactoring (15) · verification (4) · codegen (6)        │
+│      • refactoring (15 +4 undo) · verification (4) · codegen (6)│
 │      • dep management (3) · workflow polish (2) · quick fixes   │
 └─────────────────────────────────────────────────────────────────┘
                             │
@@ -441,7 +449,9 @@ When you change the Eclipse release the fork builds against (currently 2024-09),
 Active and future sprint backlogs live under [`docs/sprints/`](docs/sprints/). Highlights:
 
 - **v1.8.0 (Sprint 14, shipped 2026-06-04)** — lifecycle-hygiene bug bundle + `refresh_workspace` consolidated tool + FQN-based `find_*` overloads + `find_duplicate_code` (clone detection) + Gradle path for the Ring 3 dep tools.
-- **Sprint 15+** — scaffolds for Fowler smell detection (~18 tools, the biggest single gap), modernisation sweeps (`var`/records/sealed/pattern-switch), multi-step refactoring orchestration (preview → apply gate + rollback), Kerievsky pattern transformations, SOLID violation detection, Android read-only tooling, HTTP/SSE transport, upstream-parity audit.
+- **v1.8.5/v1.8.6 (Sprint 14a, shipped 2026-06-08/09)** — HTTP/SSE as the default transport (one resident JVM serves N clients; stdio stays via `-transport stdio`) + MCP protocolVersion negotiation.
+- **v1.9.0 (Sprint 14b, this release)** — refactoring auto-apply + undo across all 21 mutating tools, `replace_duplicates`, `readOnlyHint` annotations, upstream v1.4.2 parity audit.
+- **Sprint 15+** — modernisation sweeps (`var`/records/sealed/pattern-switch) + Cursor-feedback DX block, then under the GOJA brand: Fowler smell detection (~18 tools, the biggest single gap), multi-step orchestration (generalising v1.9.0's apply primitives into plan-level transactions), Kerievsky pattern transformations, SOLID violation detection.
 
 The improvement direction is set by live refactoring sessions on real-world Java workspaces, not roadmap-deck speculation. If a tool surfaces friction repeatedly, it gets a sprint.
 
