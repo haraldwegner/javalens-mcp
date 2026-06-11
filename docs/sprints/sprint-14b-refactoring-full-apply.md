@@ -14,9 +14,21 @@
 
 **Policy attached:** every refactoring tool added to the fork from this sprint onward MUST ship with the apply path. See "Refactoring tool contract" section below — this becomes a durable PR-review gate.
 
-## Phase 0 — Upstream pzalutski v1.3.5 parity sync (folded in 2026-06-07)
+## Folded-in scope: `readOnlyHint` tool annotations (2026-06-11)
 
-Originally [`sprint-future-upstream-parity-audit.md`](sprint-future-upstream-parity-audit.md), targeting upstream v1.3.5 (May 26 2026, 63 tools). The audit + porting list is ~1-2 days; cheap cherry-picks fold into this sprint. Bigger items (Bazel detection rework, annotation-processor source-root handling) defer to a later sprint if they surface.
+Originally penciled as a standalone v1.8.7 hotfix on the 14a line; rollout pushed back and
+folded here instead. Scope: `tools/list` gains `annotations: { readOnlyHint: true }` for
+the detect tool set (`find_*`, `get_*`, `analyze_*`, `search_*`, `list_projects`,
+`health_check`, `validate_syntax`); mutating tools ship without it. Motivation: Cursor Ask
+mode rejects `CallMcpTool` as non-readonly ([`../javalens_feeback_from_cursor.md`](../javalens_feeback_from_cursor.md));
+the MCP spec ≥ 2025-03-26 annotation lets clients allow read-only tools in restricted
+modes. Acceptance: Cursor Ask mode runs `health_check` / `analyze_type` / `find_references`
+without switching to Agent mode. Full design record in
+[`sprint-14a-http-sse-transport.md`](sprint-14a-http-sse-transport.md) § v1.8.7.
+
+## Phase 0 — Upstream parity sync (folded in 2026-06-07; **retargeted v1.3.5 → v1.4.2 on 2026-06-11**)
+
+Originally [`sprint-future-upstream-parity-audit.md`](sprint-future-upstream-parity-audit.md), targeting upstream v1.3.5 (May 26 2026, 63 tools). At audit time upstream had already shipped v1.3.6/v1.4.0/v1.4.1/v1.4.2 (75 tools, 2026-06-11) — the audit covers through **v1.4.2**; findings + porting list at [`../upstream-parity-v1.4.2.md`](../upstream-parity-v1.4.2.md). Key outcome: both USPs verified intact (upstream is still stdio-only and still returns hand-apply `editsByFile` from ALL refactor tools, including their new v1.4.1 descriptor-based structural ones). One cherry-pick landed (manifest-derived `serverInfo.version`). Bigger items (Java 25 target platform, Lombok agent, analysis tools) assigned to later sprints in the audit doc.
 
 **Outcome:** porting list document + any cheap cherry-picks (small fixes, schema improvements) landed in v1.9.0. **No coupling between upstream-audit outcome and the apply-policy retrofit** — both proceed independently within the sprint.
 
@@ -116,7 +128,7 @@ What we build (the orchestration layer):
 | 3 new MCP tools (`apply_refactoring`, `undo_refactoring`, `inspect_refactoring`) | ~1 day | Each ~30 lines: cache lookup + `Change.perform()` + cache-the-result |
 | Migrate 10 local refactorings: wrap `TextEdit` output in a `TextChange` and `perform()` instead of serializing | ~3 days | ~0.3 day/tool. Mostly plumbing the diff into the response shape |
 | Migrate 5 structural refactorings: capture the undo-Change returned by `Change.perform()` (currently discarded) | ~1 day | The `perform()` call is already there; we just stop throwing away its return value |
-| Unified-diff serialization | ~0.5 day | Reusable from Sprint 13 tools that already render diffs |
+| Unified-diff serialization | ~1 day | **Correction 2026-06-11: built new.** Planning exploration found NO existing diff utility anywhere in the codebase (the "reusable from Sprint 13" assumption was wrong — tools return raw edit JSON, never diffs) |
 | `auto_apply: bool` schema additions to all 15 refactor tools | ~0.5 day | Schema edit + handler branch |
 | `replace_duplicates(cloneGroupId, options)` companion tool | ~1.5 days | New tool: takes clone-group from `find_duplicate_code`, picks canonical, calls `extract_method` + per-clone replace using the apply primitives shipped earlier this sprint. |
 | Tests — new tool smokes + per-existing-tool round-trip + verify-then-undo loop + replace_duplicates round-trip | ~2 days | |

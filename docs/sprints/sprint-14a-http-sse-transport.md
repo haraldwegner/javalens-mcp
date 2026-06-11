@@ -138,7 +138,12 @@ Sprint 14a's release line carries transport/protocol hotfixes discovered in live
 
 Pre-v1.8.6 the `initialize` response hardcoded `protocolVersion: "2024-11-05"`. Per the MCP spec, a client that requests a newer version and receives an unsupported echo MUST disconnect — Claude Code did exactly that, killing every HTTP connector at session start. Fix: `SUPPORTED_PROTOCOL_VERSIONS = {2024-11-05, 2025-03-26, 2025-06-18}`; echo the client's requested version when supported, else respond with the latest supported. Live-verified against Claude Code, Cursor, and Antigravity (all three negotiate cleanly; Antigravity smoke 2026-06-10 ran 8 tools / 0 connection errors).
 
-### v1.8.7 — `readOnlyHint` tool annotations (PLANNED; re-scoped from Sprint 14b → 14a line per Harald 2026-06-11)
+### v1.8.7 — `readOnlyHint` tool annotations (FOLDED INTO v1.9.0 per Harald 2026-06-11 — no separate v1.8.7 release)
+
+> **Re-scoped same day:** the rollout of a standalone v1.8.7 was pushed back and the
+> scope below ships as a Sprint 14b stage in **v1.9.0** instead (see
+> [`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md)).
+> Content kept here for the design record.
 
 **Motivation (Cursor field feedback, [`../javalens_feeback_from_cursor.md`](../javalens_feeback_from_cursor.md)):** in Cursor **Ask mode**, `CallMcpTool` is rejected as non-readonly, blocking ALL javalens use — even pure analysis calls — until the user switches to Agent mode. The MCP spec (protocol ≥ 2025-03-26) defines per-tool `annotations` including `readOnlyHint: true`; clients use it to allow read-only tools in restricted modes.
 
