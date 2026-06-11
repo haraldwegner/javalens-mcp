@@ -15,6 +15,22 @@ public class ToolRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(ToolRegistry.class);
 
+    /**
+     * Sprint 14b: MCP tool annotations (spec ≥ 2025-03-26). Detect tools are
+     * marked {@code readOnlyHint} so restricted client modes (Cursor Ask
+     * mode) can allow them without switching to an agent mode. Name-driven:
+     * the four detect prefixes plus the read-only tools whose names match no
+     * prefix. Anything that mutates source, project configuration, build
+     * output, or workspace state stays unannotated — when in doubt, leave a
+     * tool unannotated (a missing hint is "unknown", a wrong hint lets a
+     * restricted mode mutate the workspace).
+     */
+    private static final Set<String> READ_ONLY_PREFIXES =
+        Set.of("find_", "get_", "analyze_", "search_");
+    private static final Set<String> READ_ONLY_NAMES = Set.of(
+        "go_to_definition", "health_check", "list_projects",
+        "validate_syntax", "inspect_refactoring", "suggest_imports");
+
     private final Map<String, Tool> tools = new LinkedHashMap<>();
 
     /**
@@ -78,10 +94,26 @@ public class ToolRegistry {
             def.put("name", tool.getName());
             def.put("description", tool.getDescription());
             def.put("inputSchema", tool.getInputSchema());
+            if (isReadOnly(tool.getName())) {
+                def.put("annotations", Map.of("readOnlyHint", Boolean.TRUE));
+            }
             definitions.add(def);
         }
 
         return definitions;
+    }
+
+    /** True when the named tool is a detect tool per the Sprint 14b sets. */
+    static boolean isReadOnly(String toolName) {
+        if (READ_ONLY_NAMES.contains(toolName)) {
+            return true;
+        }
+        for (String prefix : READ_ONLY_PREFIXES) {
+            if (toolName.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

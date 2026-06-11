@@ -194,6 +194,29 @@ class McpProtocolHandlerTest {
     }
 
     @Test
+    @DisplayName("tools/list marks detect tools readOnlyHint and leaves mutating tools unannotated")
+    void toolsList_marksDetectToolsReadOnly() throws Exception {
+        toolRegistry.register(new MockTool("find_references", "detect"));
+        toolRegistry.register(new MockTool("rename_symbol", "mutate"));
+
+        String request = """
+            {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+            """;
+
+        String response = handler.processMessage(request);
+
+        JsonNode tools = objectMapper.readTree(response).get("result").get("tools");
+        JsonNode detect = tools.get(0);
+        assertEquals("find_references", detect.get("name").asText());
+        assertNotNull(detect.get("annotations"), "detect tool must carry annotations");
+        assertTrue(detect.get("annotations").get("readOnlyHint").asBoolean());
+
+        JsonNode mutate = tools.get(1);
+        assertEquals("rename_symbol", mutate.get("name").asText());
+        assertNull(mutate.get("annotations"), "mutating tool must stay unannotated");
+    }
+
+    @Test
     @DisplayName("tools/list should return empty array when no tools")
     void toolsList_returnsEmptyArray() throws Exception {
         String request = """
