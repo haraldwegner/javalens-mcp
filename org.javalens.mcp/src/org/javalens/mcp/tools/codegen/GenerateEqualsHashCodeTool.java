@@ -32,6 +32,8 @@ import org.eclipse.jdt.core.dom.rewrite.ListRewrite;
 import org.eclipse.jface.text.Document;
 import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
+import org.javalens.mcp.refactoring.SourceCommit;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
 import org.javalens.mcp.tools.AbstractTool;
@@ -58,8 +60,12 @@ public class GenerateEqualsHashCodeTool extends AbstractTool {
 
     private static final Logger log = LoggerFactory.getLogger(GenerateEqualsHashCodeTool.class);
 
-    public GenerateEqualsHashCodeTool(Supplier<IJdtService> serviceSupplier) {
+    private final org.javalens.mcp.refactoring.RefactoringChangeCache changeCache;
+
+    public GenerateEqualsHashCodeTool(Supplier<IJdtService> serviceSupplier,
+                                     RefactoringChangeCache changeCache) {
         super(serviceSupplier);
+        this.changeCache = changeCache;
     }
 
     @Override
@@ -104,7 +110,7 @@ public class GenerateEqualsHashCodeTool extends AbstractTool {
             "items", Map.of("type", "string")));
         schema.put("properties", properties);
         schema.put("required", List.of("filePath", "line", "column", "fields"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
@@ -199,17 +205,38 @@ public class GenerateEqualsHashCodeTool extends AbstractTool {
             edits.apply(doc);
             String newSource = doc.get();
 
-            cu.becomeWorkingCopy(new NullProgressMonitor());
-            try {
-                cu.getBuffer().setContents(newSource);
-                // Add the Objects import if missing — public ICompilationUnit API.
-                cu.createImport("java.util.Objects", null, new NullProgressMonitor());
-                cu.commitWorkingCopy(true, new NullProgressMonitor());
-            } finally {
-                cu.discardWorkingCopy();
+            // Ensure the java.util.Objects import textually so the staged and
+            // applied paths produce identical, compilable source.
+            if (!newSource.contains("import java.util.Objects;")) {
+                int pkgEnd = newSource.indexOf(";");
+                if (newSource.startsWith("package ") && pkgEnd > 0) {
+                    newSource = newSource.substring(0, pkgEnd + 1)
+                        + "\n\nimport java.util.Objects;"
+                        + newSource.substring(pkgEnd + 1);
+                } else {
+                    newSource = "import java.util.Objects;\n" + newSource;
+                }
             }
 
-            // Re-read the source after the import-add so the response carries the final form.
+            boolean autoApply = getBooleanParam(arguments, "auto_apply", true);
+            if (!autoApply) {
+                SourceCommit.Staged staged = SourceCommit.stageFullReplace(
+                    cu, newSource, "generate_equals_hashcode", changeCache, service);
+                Map<String, Object> stagedData = new LinkedHashMap<>();
+                stagedData.put("operation", "generate_equals_hashcode");
+                stagedData.put("applied", false);
+                stagedData.put("changeId", staged.changeId());
+                stagedData.put("diff", staged.diff());
+                stagedData.put("filePath", staged.filePath());
+                return ToolResponse.success(stagedData, ResponseMeta.builder()
+                    .suggestedNextTools(List.of(
+                        "apply_refactoring with this changeId to commit the staged change",
+                        "inspect_refactoring with this changeId to re-examine the diff"))
+                    .build());
+            }
+
+            SourceCommit.Committed committed = SourceCommit.commitWithUndo(
+                cu, newSource, "generate_equals_hashcode", changeCache, service);
             String finalSource = cu.getSource();
 
             Map<String, Object> data = new LinkedHashMap<>();
@@ -220,11 +247,10 @@ public class GenerateEqualsHashCodeTool extends AbstractTool {
             data.put("warnings", warnings);
             data.put("generatedSource", finalSource);
 
-            List<Map<String, Object>> modifiedFiles = new ArrayList<>();
-            modifiedFiles.add(Map.of(
-                "filePath", data.get("filePath"),
-                "summary", "added equals/hashCode over " + fieldInfos.size() + " field(s)"));
-            data.put("modifiedFiles", modifiedFiles);
+            data.put("applied", true);
+            data.put("filesModified", List.of(committed.filePath()));
+            data.put("diff", committed.diff());
+            data.put("undoChangeId", committed.undoChangeId());
 
             return ToolResponse.success(data, ResponseMeta.builder()
                 .totalCount(methodsAdded.size())

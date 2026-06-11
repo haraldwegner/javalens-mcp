@@ -26,12 +26,15 @@ class GenerateToStringToolTest {
 
     private JdtServiceImpl service;
     private GenerateToStringTool tool;
+    private org.javalens.mcp.tools.UndoRefactoringTool undoTool;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() throws Exception {
         service = helper.loadProjectCopy("simple-maven");
-        tool = new GenerateToStringTool(() -> service);
+        var cache = new org.javalens.mcp.refactoring.RefactoringChangeCache();
+        tool = new GenerateToStringTool(() -> service, cache);
+        undoTool = new org.javalens.mcp.tools.UndoRefactoringTool(() -> service, cache);
         objectMapper = new ObjectMapper();
     }
 
@@ -97,6 +100,37 @@ class GenerateToStringToolTest {
             "must call sb.append; got:\n" + src);
         assertTrue(src.contains("return sb.toString()"),
             "must return sb.toString(); got:\n" + src);
+    }
+
+    @Test
+    @DisplayName("Sprint 14b: codegen apply → undo restores the original file byte-for-byte")
+    void generateToString_undoRestoresOriginal() throws Exception {
+        IFile target = findFile("UnusedCode.java");
+        assertNotNull(target);
+        java.nio.file.Path targetPath = target.getLocation().toFile().toPath();
+        String original = java.nio.file.Files.readString(targetPath);
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", targetPath.toString());
+        args.put("line", 7);
+        args.put("column", 4);
+        args.put("style", "STRING_CONCATENATION");
+        args.putArray("fields").add("unusedField");
+
+        ToolResponse applied = tool.execute(args);
+        assertTrue(applied.isSuccess(), "got: " + applied.getError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) applied.getData();
+        String undoChangeId = (String) data.get("undoChangeId");
+        assertNotNull(undoChangeId, "codegen must return an undo handle");
+        assertTrue(java.nio.file.Files.readString(targetPath).contains("toString()"),
+            "generated method must be on disk");
+
+        ToolResponse undone = undoTool.execute(
+            objectMapper.createObjectNode().put("undoChangeId", undoChangeId));
+        assertTrue(undone.isSuccess(), "undo must succeed; got: " + undone.getError());
+        assertTrue(original.equals(java.nio.file.Files.readString(targetPath)),
+            "undo must restore the original content byte-for-byte");
     }
 
     private IFile findFile(String simpleName) throws Exception {

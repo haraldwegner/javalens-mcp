@@ -158,22 +158,4 @@ public abstract class AbstractApplyingRefactoringTool extends AbstractTool {
             .build());
     }
 
-    /**
-     * Decorate a tool's input schema with the {@code auto_apply} flag.
-     * Mirror of {@link AbstractTool#withProjectKey}.
-     */
-    @SuppressWarnings("unchecked")
-    protected static Map<String, Object> withAutoApply(Map<String, Object> schema) {
-        Map<String, Object> wrapped = new LinkedHashMap<>(schema);
-        Map<String, Object> oldProps = (Map<String, Object>) wrapped.getOrDefault("properties", Map.of());
-        Map<String, Object> newProps = new LinkedHashMap<>(oldProps);
-        newProps.putIfAbsent("auto_apply", Map.of(
-            "type", "boolean",
-            "description", "Default true: perform the refactoring immediately and return "
-                + "{ filesModified, diff, undoChangeId }. Set false to stage only — returns "
-                + "{ changeId, diff } for a later apply_refactoring call."
-        ));
-        wrapped.put("properties", newProps);
-        return wrapped;
-    }
 }

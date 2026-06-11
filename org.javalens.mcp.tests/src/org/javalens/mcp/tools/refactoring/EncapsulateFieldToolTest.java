@@ -33,7 +33,7 @@ class EncapsulateFieldToolTest {
     @BeforeEach
     void setUp() throws Exception {
         JdtServiceImpl service = helper.loadProjectCopy("simple-maven");
-        tool = new EncapsulateFieldTool(() -> service);
+        tool = new EncapsulateFieldTool(() -> service, new org.javalens.mcp.refactoring.RefactoringChangeCache());
         objectMapper = new ObjectMapper();
         projectPath = service.getProjectRoot();
     }

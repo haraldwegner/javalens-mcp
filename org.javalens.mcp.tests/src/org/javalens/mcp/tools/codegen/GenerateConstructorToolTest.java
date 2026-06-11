@@ -44,7 +44,7 @@ class GenerateConstructorToolTest {
     @BeforeEach
     void setUp() throws Exception {
         service = helper.loadProjectCopy("simple-maven");
-        tool = new GenerateConstructorTool(() -> service);
+        tool = new GenerateConstructorTool(() -> service, new org.javalens.mcp.refactoring.RefactoringChangeCache());
         objectMapper = new ObjectMapper();
     }
 

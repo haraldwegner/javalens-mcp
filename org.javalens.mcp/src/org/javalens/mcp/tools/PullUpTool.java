@@ -9,6 +9,7 @@ import org.eclipse.jdt.internal.corext.codemanipulation.CodeGenerationSettings;
 import org.eclipse.jdt.internal.corext.refactoring.structure.PullUpRefactoringProcessor;
 import org.eclipse.ltk.core.refactoring.participants.ProcessorBasedRefactoring;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.models.ToolResponse;
 
 import java.nio.file.Path;
@@ -31,8 +32,9 @@ import java.util.function.Supplier;
  */
 public class PullUpTool extends AbstractRefactoringTool {
 
-    public PullUpTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public PullUpTool(Supplier<IJdtService> serviceSupplier,
+                     RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -82,7 +84,7 @@ public class PullUpTool extends AbstractRefactoringTool {
             "description", "For methods only: leave an abstract declaration on the subtype (default false)."));
         schema.put("properties", properties);
         schema.put("required", List.of("filePath", "line", "column"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
@@ -143,7 +145,7 @@ public class PullUpTool extends AbstractRefactoringTool {
             }
 
             ProcessorBasedRefactoring refactoring = new ProcessorBasedRefactoring(processor);
-            return runRefactoring(service, refactoring, "pull_up");
+            return runRefactoring(service, refactoring, "pull_up", arguments);
 
         } catch (Exception e) {
             return ToolResponse.internalError(e);

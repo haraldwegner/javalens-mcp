@@ -8,6 +8,7 @@ import org.eclipse.jdt.core.refactoring.IJavaRefactorings;
 import org.eclipse.jdt.core.refactoring.descriptors.RenameJavaElementDescriptor;
 import org.eclipse.ltk.core.refactoring.RefactoringCore;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.models.ToolResponse;
 
 import java.util.LinkedHashMap;
@@ -26,8 +27,9 @@ import java.util.function.Supplier;
  */
 public class MovePackageTool extends AbstractRefactoringTool {
 
-    public MovePackageTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public MovePackageTool(Supplier<IJdtService> serviceSupplier,
+                          RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -78,7 +80,7 @@ public class MovePackageTool extends AbstractRefactoringTool {
 
         schema.put("properties", properties);
         schema.put("required", List.of("packageName", "newPackageName"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
@@ -119,7 +121,7 @@ public class MovePackageTool extends AbstractRefactoringTool {
             descriptor.setNewName(newPackageName);
             descriptor.setUpdateReferences(updateReferences);
 
-            return runRefactoring(service, descriptor, "move_package");
+            return runRefactoring(service, descriptor, "move_package", arguments);
 
         } catch (Exception e) {
             return ToolResponse.internalError(e);

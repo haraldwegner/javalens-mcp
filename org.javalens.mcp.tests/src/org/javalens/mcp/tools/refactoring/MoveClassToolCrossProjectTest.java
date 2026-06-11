@@ -43,7 +43,7 @@ class MoveClassToolCrossProjectTest {
     @BeforeEach
     void setUp() throws Exception {
         JdtServiceImpl service = helper.loadWorkspaceCopy("simple-maven", "simple-maven-b");
-        tool = new MoveClassTool(() -> service);
+        tool = new MoveClassTool(() -> service, new org.javalens.mcp.refactoring.RefactoringChangeCache());
         objectMapper = new ObjectMapper();
         simpleMavenA = helper.getTempDirectory().resolve("simple-maven");
         simpleMavenB = helper.getTempDirectory().resolve("simple-maven-b");
@@ -78,8 +78,8 @@ class MoveClassToolCrossProjectTest {
     }
 
     @Test
-    @DisplayName("bugs.md #10 sub-defect 2: response.modifiedFiles is populated (not empty) after a successful move")
-    void crossProjectMove_populatesModifiedFiles() throws Exception {
+    @DisplayName("bugs.md #10 sub-defect 2 / Sprint 14b: response.filesModified is populated after a successful move")
+    void crossProjectMove_populatesFilesModified() throws Exception {
         Path source = simpleMavenA.resolve("src/main/java/com/example/HelloWorld.java");
         ObjectNode args = objectMapper.createObjectNode();
         args.put("filePath", source.toString());
@@ -92,20 +92,16 @@ class MoveClassToolCrossProjectTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> data = (Map<String, Object>) r.getData();
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> modifiedFiles = (List<Map<String, Object>>) data.get("modifiedFiles");
+        List<String> filesModified = (List<String>) data.get("filesModified");
 
-        assertNotNull(modifiedFiles, "modifiedFiles must not be null");
-        assertFalse(modifiedFiles.isEmpty(),
-            "modifiedFiles must NOT be empty after a successful move (bugs.md #10 sub-defect 2); response: " + data);
-        // Sanity: at least one entry mentions HelloWorld.java in the path/element.
-        boolean mentionsMovedFile = modifiedFiles.stream()
-            .anyMatch(entry -> {
-                String fp = String.valueOf(entry.get("filePath"));
-                String el = String.valueOf(entry.get("element"));
-                return fp.contains("HelloWorld") || el.contains("HelloWorld");
-            });
-        assertTrue(mentionsMovedFile,
-            "at least one modifiedFiles entry should mention HelloWorld; got: " + modifiedFiles);
+        assertNotNull(filesModified, "filesModified must not be null");
+        assertFalse(filesModified.isEmpty(),
+            "filesModified must NOT be empty after a successful move (bugs.md #10 sub-defect 2); response: " + data);
+        // Sanity: at least one entry mentions HelloWorld.java.
+        assertTrue(filesModified.stream().anyMatch(fp -> fp.contains("HelloWorld")),
+            "at least one filesModified entry should mention HelloWorld; got: " + filesModified);
+        // Sprint 14b: a successful structural refactor now carries an undo handle.
+        assertNotNull(data.get("undoChangeId"), "structural refactor must return an undo handle");
     }
 
     private String listB() {

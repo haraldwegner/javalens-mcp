@@ -7,6 +7,8 @@ import org.eclipse.jdt.core.IJavaProject;
 import org.eclipse.jdt.core.IMethod;
 import org.eclipse.jdt.core.IType;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.refactoring.DiffRenderer;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
 import org.javalens.mcp.tools.AbstractTool;
@@ -41,8 +43,12 @@ public class GenerateTestSkeletonTool extends AbstractTool {
 
     private static final Logger log = LoggerFactory.getLogger(GenerateTestSkeletonTool.class);
 
-    public GenerateTestSkeletonTool(Supplier<IJdtService> serviceSupplier) {
+    private final org.javalens.mcp.refactoring.RefactoringChangeCache changeCache;
+
+    public GenerateTestSkeletonTool(Supplier<IJdtService> serviceSupplier,
+                                   RefactoringChangeCache changeCache) {
         super(serviceSupplier);
+        this.changeCache = changeCache;
     }
 
     @Override
@@ -88,7 +94,7 @@ public class GenerateTestSkeletonTool extends AbstractTool {
         properties.put("includePrivateMethods", Map.of("type", "boolean"));
         schema.put("properties", properties);
         schema.put("required", List.of("filePath", "line", "column"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
@@ -159,6 +165,24 @@ public class GenerateTestSkeletonTool extends AbstractTool {
             String generatedSource = renderSkeleton(packageName, testTypeName, typeName,
                 methodNames, resolvedFramework);
 
+            String newFileDiff = DiffRenderer.unifiedDiff(
+                service.getPathUtils().formatPath(testFile), "", generatedSource);
+
+            boolean autoApply = getBooleanParam(arguments, "auto_apply", true);
+            if (!autoApply) {
+                // Preview-only: file creation can't be staged as a cached
+                // Change (the target folder may not exist in the workspace
+                // tree yet) — return the rendered content for inspection.
+                Map<String, Object> stagedData = new LinkedHashMap<>();
+                stagedData.put("operation", "generate_test_skeleton");
+                stagedData.put("applied", false);
+                stagedData.put("generatedFilePath", service.getPathUtils().formatPath(testFile));
+                stagedData.put("diff", newFileDiff);
+                stagedData.put("generatedSource", generatedSource);
+                stagedData.put("note", "Re-run with auto_apply: true (default) to create the file.");
+                return ToolResponse.success(stagedData, ResponseMeta.builder().build());
+            }
+
             Files.createDirectories(testFile.getParent());
             Files.writeString(testFile, generatedSource, StandardCharsets.UTF_8);
 
@@ -169,6 +193,21 @@ public class GenerateTestSkeletonTool extends AbstractTool {
                     new org.eclipse.core.runtime.NullProgressMonitor());
             } catch (Exception ignore) {}
 
+            // Undo handle: delete the created file (resolvable only after the
+            // refresh registered it in the workspace tree).
+            String undoChangeId = null;
+            org.eclipse.core.resources.IFile createdFile =
+                org.eclipse.core.resources.ResourcesPlugin.getWorkspace().getRoot()
+                    .getFileForLocation(org.eclipse.core.runtime.Path.fromOSString(testFile.toString()));
+            if (createdFile != null && createdFile.exists()) {
+                undoChangeId = changeCache.put(
+                    RefactoringChangeCache.Kind.UNDO,
+                    new org.eclipse.ltk.core.refactoring.resource.DeleteResourceChange(
+                        createdFile.getFullPath(), true),
+                    "undo: generate_test_skeleton " + testTypeName,
+                    "", List.of(service.getPathUtils().formatPath(testFile)));
+            }
+
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("operation", "generate_test_skeleton");
             data.put("framework", resolvedFramework);
@@ -176,11 +215,10 @@ public class GenerateTestSkeletonTool extends AbstractTool {
             data.put("methodsStubbed", methodNames);
             data.put("generatedSource", generatedSource);
 
-            List<Map<String, Object>> modifiedFiles = new ArrayList<>();
-            modifiedFiles.add(Map.of(
-                "filePath", data.get("generatedFilePath"),
-                "summary", "created " + testTypeName + " with " + methodNames.size() + " test stub(s)"));
-            data.put("modifiedFiles", modifiedFiles);
+            data.put("applied", true);
+            data.put("filesModified", List.of(data.get("generatedFilePath")));
+            data.put("diff", newFileDiff);
+            data.put("undoChangeId", undoChangeId);
 
             return ToolResponse.success(data, ResponseMeta.builder()
                 .totalCount(methodNames.size())

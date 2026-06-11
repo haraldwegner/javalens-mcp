@@ -6,6 +6,7 @@ import org.eclipse.jdt.core.IField;
 import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.internal.corext.refactoring.sef.SelfEncapsulateFieldRefactoring;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.models.ToolResponse;
 
 import java.nio.file.Path;
@@ -26,8 +27,9 @@ import java.util.function.Supplier;
  */
 public class EncapsulateFieldTool extends AbstractRefactoringTool {
 
-    public EncapsulateFieldTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public EncapsulateFieldTool(Supplier<IJdtService> serviceSupplier,
+                               RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -86,7 +88,7 @@ public class EncapsulateFieldTool extends AbstractRefactoringTool {
             "description", "Emit Javadoc stubs on the generated accessors (default false)."));
         schema.put("properties", properties);
         schema.put("required", List.of("filePath", "line", "column"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
@@ -139,7 +141,7 @@ public class EncapsulateFieldTool extends AbstractRefactoringTool {
             refactoring.setEncapsulateDeclaringClass(true);
             refactoring.setGenerateJavadoc(generateJavadoc);
 
-            return runRefactoring(service, refactoring, "encapsulate_field");
+            return runRefactoring(service, refactoring, "encapsulate_field", arguments);
 
         } catch (Exception e) {
             return ToolResponse.internalError(e);

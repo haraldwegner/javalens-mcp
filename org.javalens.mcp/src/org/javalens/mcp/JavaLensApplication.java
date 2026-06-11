@@ -408,11 +408,11 @@ public class JavaLensApplication implements IApplication {
         toolRegistry.register(new ConvertAnonymousToLambdaTool(() -> jdtService, refactoringChangeCache));
 
         // Sprint 11 Phase E (v1.5.1): JDT-LTK structural refactoring tools.
-        toolRegistry.register(new MoveClassTool(() -> jdtService));
-        toolRegistry.register(new MovePackageTool(() -> jdtService));
-        toolRegistry.register(new PullUpTool(() -> jdtService));
-        toolRegistry.register(new PushDownTool(() -> jdtService));
-        toolRegistry.register(new EncapsulateFieldTool(() -> jdtService));
+        toolRegistry.register(new MoveClassTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new MovePackageTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new PullUpTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new PushDownTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new EncapsulateFieldTool(() -> jdtService, refactoringChangeCache));
 
         // Sprint 12 (v1.6.0): Ring 1 workspace verification tools.
         toolRegistry.register(new CompileWorkspaceTool(() -> jdtService));
@@ -425,12 +425,12 @@ public class JavaLensApplication implements IApplication {
         toolRegistry.register(new FindDuplicateCodeTool(() -> jdtService));
 
         // Sprint 13 (v1.7.0): Ring 2 code generation tools.
-        toolRegistry.register(new GenerateConstructorTool(() -> jdtService));
-        toolRegistry.register(new GenerateGettersSettersTool(() -> jdtService));
-        toolRegistry.register(new GenerateEqualsHashCodeTool(() -> jdtService));
-        toolRegistry.register(new GenerateToStringTool(() -> jdtService));
-        toolRegistry.register(new OverrideMethodsTool(() -> jdtService));
-        toolRegistry.register(new GenerateTestSkeletonTool(() -> jdtService));
+        toolRegistry.register(new GenerateConstructorTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new GenerateGettersSettersTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new GenerateEqualsHashCodeTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new GenerateToStringTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new OverrideMethodsTool(() -> jdtService, refactoringChangeCache));
+        toolRegistry.register(new GenerateTestSkeletonTool(() -> jdtService, refactoringChangeCache));
 
         // Sprint 13 (v1.7.0): Ring 3 build/dep management (Maven-only).
         toolRegistry.register(new AddDependencyTool(() -> jdtService));

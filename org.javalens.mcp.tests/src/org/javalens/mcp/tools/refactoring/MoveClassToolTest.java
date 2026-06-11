@@ -35,7 +35,7 @@ class MoveClassToolTest {
     @BeforeEach
     void setUp() throws Exception {
         JdtServiceImpl service = helper.loadProjectCopy("simple-maven");
-        tool = new MoveClassTool(() -> service);
+        tool = new MoveClassTool(() -> service, new org.javalens.mcp.refactoring.RefactoringChangeCache());
         objectMapper = new ObjectMapper();
         // The project lives at helper.getTempDirectory()/simple-maven after
         // copyFixture; loadProjectCopy returned the same temp-rooted service.

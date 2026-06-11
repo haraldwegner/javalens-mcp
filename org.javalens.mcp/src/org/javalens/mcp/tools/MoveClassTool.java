@@ -13,6 +13,7 @@ import org.eclipse.jdt.core.refactoring.IJavaRefactorings;
 import org.eclipse.jdt.core.refactoring.descriptors.MoveDescriptor;
 import org.eclipse.ltk.core.refactoring.RefactoringCore;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.core.LoadedProject;
 import org.javalens.mcp.models.ToolResponse;
 
@@ -34,8 +35,9 @@ import java.util.function.Supplier;
  */
 public class MoveClassTool extends AbstractRefactoringTool {
 
-    public MoveClassTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public MoveClassTool(Supplier<IJdtService> serviceSupplier,
+                        RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -99,7 +101,7 @@ public class MoveClassTool extends AbstractRefactoringTool {
             "description", "Update import lines and qualified references in callers (default true)."));
         schema.put("properties", properties);
         schema.put("required", List.of("filePath", "line", "column", "targetPackage"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
@@ -190,7 +192,7 @@ public class MoveClassTool extends AbstractRefactoringTool {
             descriptor.setDestination(destination);
             descriptor.setUpdateReferences(updateReferences);
 
-            return runRefactoring(service, descriptor, "move_class");
+            return runRefactoring(service, descriptor, "move_class", arguments);
 
         } catch (Exception e) {
             return ToolResponse.internalError(e);

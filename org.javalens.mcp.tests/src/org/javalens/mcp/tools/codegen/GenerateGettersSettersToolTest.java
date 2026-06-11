@@ -40,7 +40,7 @@ class GenerateGettersSettersToolTest {
     @BeforeEach
     void setUp() throws Exception {
         service = helper.loadProjectCopy("simple-maven");
-        tool = new GenerateGettersSettersTool(() -> service);
+        tool = new GenerateGettersSettersTool(() -> service, new org.javalens.mcp.refactoring.RefactoringChangeCache());
         objectMapper = new ObjectMapper();
     }
 

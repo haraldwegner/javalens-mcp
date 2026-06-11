@@ -27,13 +27,16 @@ class PushDownToolTest {
     TestProjectHelper helper = new TestProjectHelper();
 
     private PushDownTool tool;
+    private org.javalens.mcp.tools.UndoRefactoringTool undoTool;
     private ObjectMapper objectMapper;
     private Path projectPath;
 
     @BeforeEach
     void setUp() throws Exception {
         JdtServiceImpl service = helper.loadProjectCopy("simple-maven");
-        tool = new PushDownTool(() -> service);
+        var cache = new org.javalens.mcp.refactoring.RefactoringChangeCache();
+        tool = new PushDownTool(() -> service, cache);
+        undoTool = new org.javalens.mcp.tools.UndoRefactoringTool(() -> service, cache);
         objectMapper = new ObjectMapper();
         projectPath = service.getProjectRoot();
     }
@@ -66,6 +69,33 @@ class PushDownToolTest {
             "commonMethod should no longer appear in RefactoringBase after push-down");
         assertTrue(derivedPart.contains("commonMethod"),
             "commonMethod should now appear in RefactoringDerived");
+    }
+
+    @Test
+    @DisplayName("Sprint 14b: structural apply → undo restores the original file byte-for-byte")
+    void pushDown_undoRestoresOriginal() throws Exception {
+        Path file = projectPath.resolve("src/main/java/com/example/RefactoringHierarchy.java");
+        String original = Files.readString(file);
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", file.toString());
+        args.put("line", 18);
+        args.put("column", 9);
+
+        ToolResponse applied = tool.execute(args);
+        assertTrue(applied.isSuccess(), "got: " + applied.getError());
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> data = (java.util.Map<String, Object>) applied.getData();
+        String undoChangeId = (String) data.get("undoChangeId");
+        assertTrue(undoChangeId != null && !undoChangeId.isBlank(),
+            "structural refactor must return an undo handle");
+        assertFalse(original.equals(Files.readString(file)), "push-down must modify the file");
+
+        ToolResponse undone = undoTool.execute(
+            objectMapper.createObjectNode().put("undoChangeId", undoChangeId));
+        assertTrue(undone.isSuccess(), "undo must succeed; got: " + undone.getError());
+        assertTrue(original.equals(Files.readString(file)),
+            "undo must restore the original content byte-for-byte");
     }
 
     @Test

@@ -7,6 +7,7 @@ import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.internal.corext.refactoring.structure.PushDownRefactoringProcessor;
 import org.eclipse.ltk.core.refactoring.participants.ProcessorBasedRefactoring;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.javalens.mcp.models.ToolResponse;
 
 import java.nio.file.Path;
@@ -27,8 +28,9 @@ import java.util.function.Supplier;
  */
 public class PushDownTool extends AbstractRefactoringTool {
 
-    public PushDownTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public PushDownTool(Supplier<IJdtService> serviceSupplier,
+                       RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -74,7 +76,7 @@ public class PushDownTool extends AbstractRefactoringTool {
             "description", "Zero-based column number on the line."));
         schema.put("properties", properties);
         schema.put("required", List.of("filePath", "line", "column"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
@@ -109,7 +111,7 @@ public class PushDownTool extends AbstractRefactoringTool {
                 new PushDownRefactoringProcessor(new IMember[]{member});
 
             ProcessorBasedRefactoring refactoring = new ProcessorBasedRefactoring(processor);
-            return runRefactoring(service, refactoring, "push_down");
+            return runRefactoring(service, refactoring, "push_down", arguments);
 
         } catch (Exception e) {
             return ToolResponse.internalError(e);

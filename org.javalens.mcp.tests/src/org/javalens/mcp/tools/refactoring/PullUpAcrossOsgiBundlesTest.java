@@ -47,7 +47,7 @@ class PullUpAcrossOsgiBundlesTest {
         assertTrue(Files.exists(subtype), "SpecificGreeter must exist in bundle A's temp copy");
         assertTrue(Files.exists(supertype), "Greeter must exist in bundle B's temp copy");
 
-        PullUpTool tool = new PullUpTool(() -> service);
+        PullUpTool tool = new PullUpTool(() -> service, new org.javalens.mcp.refactoring.RefactoringChangeCache());
         ObjectMapper objectMapper = new ObjectMapper();
         ObjectNode args = objectMapper.createObjectNode();
         args.put("filePath", subtype.toString());

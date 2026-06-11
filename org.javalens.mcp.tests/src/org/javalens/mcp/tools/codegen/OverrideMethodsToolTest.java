@@ -40,7 +40,7 @@ class OverrideMethodsToolTest {
     @BeforeEach
     void setUp() throws Exception {
         service = helper.loadProjectCopy("simple-maven");
-        tool = new OverrideMethodsTool(() -> service);
+        tool = new OverrideMethodsTool(() -> service, new org.javalens.mcp.refactoring.RefactoringChangeCache());
         objectMapper = new ObjectMapper();
     }
 
