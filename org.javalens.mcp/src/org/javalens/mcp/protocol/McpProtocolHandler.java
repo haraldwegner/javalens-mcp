@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.javalens.mcp.tools.ToolRegistry;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -192,7 +194,7 @@ public class McpProtocolHandler {
         // Server info
         Map<String, Object> serverInfo = new LinkedHashMap<>();
         serverInfo.put("name", "JavaLens");
-        serverInfo.put("version", "2.0.0-SNAPSHOT");
+        serverInfo.put("version", serverVersion());
         result.put("serverInfo", serverInfo);
 
         // Capabilities
@@ -201,6 +203,25 @@ public class McpProtocolHandler {
         result.put("capabilities", capabilities);
 
         return result;
+    }
+
+    /**
+     * Server version for the initialize handshake, resolved from the OSGi
+     * bundle manifest. Falls back to the JAR Implementation-Version, then
+     * "unknown" on plain-classpath runtimes (unit tests) — never hardcoded.
+     */
+    static String serverVersion() {
+        try {
+            Bundle bundle = FrameworkUtil.getBundle(McpProtocolHandler.class);
+            if (bundle != null) {
+                return bundle.getVersion().toString();
+            }
+        } catch (NoClassDefFoundError ignored) {
+            // OSGi framework classes absent on a plain classpath.
+        }
+        String implementationVersion =
+            McpProtocolHandler.class.getPackage().getImplementationVersion();
+        return implementationVersion != null ? implementationVersion : "unknown";
     }
 
     /**

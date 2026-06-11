@@ -91,6 +91,11 @@ class McpProtocolHandlerTest {
         assertNotNull(result.get("protocolVersion"));
         assertNotNull(result.get("serverInfo"));
         assertEquals("JavaLens", result.get("serverInfo").get("name").asText());
+
+        String reportedVersion = result.get("serverInfo").get("version").asText();
+        assertFalse(reportedVersion.isBlank());
+        assertNotEquals("2.0.0-SNAPSHOT", reportedVersion,
+            "serverInfo.version must resolve from the bundle manifest, not a hardcoded placeholder");
     }
 
     @Test
