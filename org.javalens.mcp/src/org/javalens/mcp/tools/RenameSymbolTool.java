@@ -1,6 +1,7 @@
 package org.javalens.mcp.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.eclipse.core.resources.IFile;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.IField;
 import org.eclipse.jdt.core.IJavaElement;
@@ -19,9 +20,13 @@ import org.eclipse.jdt.core.dom.IBinding;
 import org.eclipse.jdt.core.dom.IMethodBinding;
 import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.SimpleName;
+import org.eclipse.ltk.core.refactoring.Change;
+import org.eclipse.text.edits.ReplaceEdit;
+import org.eclipse.text.edits.TextEdit;
 import org.javalens.core.IJdtService;
-import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.ChangeEngine;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,9 +40,14 @@ import java.util.function.Supplier;
 
 /**
  * Rename a symbol across the project.
- * Returns text edits for all occurrences that need to be changed.
+ *
+ * <p>Sprint 14b: auto-applies by default (contract base
+ * {@link AbstractApplyingRefactoringTool}) — returns
+ * {@code { filesModified, diff, undoChangeId, summary }}; with
+ * {@code auto_apply: false} stages the change and returns
+ * {@code { changeId, diff, summary }}.</p>
  */
-public class RenameSymbolTool extends AbstractTool {
+public class RenameSymbolTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(RenameSymbolTool.class);
 
@@ -52,8 +62,9 @@ public class RenameSymbolTool extends AbstractTool {
         "record", "sealed", "permits", "non-sealed"
     );
 
-    public RenameSymbolTool(Supplier<IJdtService> serviceSupplier) {
-        super(serviceSupplier);
+    public RenameSymbolTool(Supplier<IJdtService> serviceSupplier,
+                            RefactoringChangeCache changeCache) {
+        super(serviceSupplier, changeCache);
     }
 
     @Override
@@ -66,13 +77,18 @@ public class RenameSymbolTool extends AbstractTool {
         return """
             Rename a symbol (variable, method, field, class, etc.) across the project.
 
-            Returns text edits for all occurrences that need to be changed.
-            The caller should apply these edits to perform the rename.
+            Applies the rename directly (default) and returns
+            { filesModified, diff, undoChangeId, summary }. Verify with
+            compile_workspace; revert with undo_refactoring(undoChangeId) if needed.
+            Pass auto_apply: false to stage instead — returns { changeId, diff } for
+            inspect_refactoring / apply_refactoring.
 
             USAGE: Position on symbol, provide new name
-            OUTPUT: List of text edits to apply
+            OUTPUT: Modified files + unified diff + undo handle
 
             IMPORTANT: Uses ZERO-BASED coordinates.
+            NOTE: Renaming a public top-level class does NOT rename its file —
+            compile_workspace will flag the mismatch; use move_class or undo.
 
             Requires load_project to be called first.
             """;
@@ -101,14 +117,14 @@ public class RenameSymbolTool extends AbstractTool {
             )
         ));
         schema.put("required", List.of("filePath", "line", "column", "newName"));
-        return withProjectKey(schema);
+        return withAutoApply(withProjectKey(schema));
     }
 
     @Override
-    protected ToolResponse executeWithService(IJdtService service, JsonNode arguments) {
+    protected Preparation prepareChange(IJdtService service, JsonNode arguments) throws Exception {
         String filePath = getStringParam(arguments, "filePath");
         if (filePath == null || filePath.isBlank()) {
-            return ToolResponse.invalidParameter("filePath", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("filePath", "Required"));
         }
 
         int line = getIntParam(arguments, "line", -1);
@@ -116,124 +132,120 @@ public class RenameSymbolTool extends AbstractTool {
         String newName = getStringParam(arguments, "newName");
 
         if (line < 0 || column < 0) {
-            return ToolResponse.invalidParameter("line/column", "Must be >= 0");
+            return Preparation.fail(ToolResponse.invalidParameter("line/column", "Must be >= 0"));
         }
 
         if (newName == null || newName.isBlank()) {
-            return ToolResponse.invalidParameter("newName", "Required");
+            return Preparation.fail(ToolResponse.invalidParameter("newName", "Required"));
         }
 
         if (!isValidJavaIdentifier(newName)) {
-            return ToolResponse.invalidParameter("newName", "Not a valid Java identifier");
+            return Preparation.fail(
+                ToolResponse.invalidParameter("newName", "Not a valid Java identifier"));
         }
 
-        try {
-            Path path = Path.of(filePath);
+        Path path = Path.of(filePath);
 
-            // Use getElementAtPosition - the same reliable approach other tools use
-            IJavaElement element = service.getElementAtPosition(path, line, column);
-            if (element == null) {
-                return ToolResponse.symbolNotFound("No symbol at position");
-            }
+        // Use getElementAtPosition - the same reliable approach other tools use
+        IJavaElement element = service.getElementAtPosition(path, line, column);
+        if (element == null) {
+            return Preparation.fail(ToolResponse.symbolNotFound("No symbol at position"));
+        }
 
-            String oldName = element.getElementName();
-            String symbolKind = getElementKind(element);
+        String oldName = element.getElementName();
+        String symbolKind = getElementKind(element);
 
-            if (oldName.equals(newName)) {
-                return ToolResponse.invalidParameter("newName", "Same as current name");
-            }
+        if (oldName.equals(newName)) {
+            return Preparation.fail(
+                ToolResponse.invalidParameter("newName", "Same as current name"));
+        }
 
-            // Get the binding key by parsing the AST at the element's location
-            ICompilationUnit cu = (ICompilationUnit) element.getAncestor(IJavaElement.COMPILATION_UNIT);
-            if (cu == null) {
-                return ToolResponse.symbolNotFound("Cannot find compilation unit for element");
-            }
+        // Get the binding key by parsing the AST at the element's location
+        ICompilationUnit cu = (ICompilationUnit) element.getAncestor(IJavaElement.COMPILATION_UNIT);
+        if (cu == null) {
+            return Preparation.fail(
+                ToolResponse.symbolNotFound("Cannot find compilation unit for element"));
+        }
 
-            // Parse AST to get binding key
-            ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
-            parser.setSource(cu);
-            parser.setResolveBindings(true);
-            parser.setBindingsRecovery(true);
-            CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+        // Parse AST to get binding key
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+        parser.setSource(cu);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        CompilationUnit ast = (CompilationUnit) parser.createAST(null);
 
-            // Find the binding key using the element's source range
-            String targetKey = findBindingKey(element, ast, oldName);
-            if (targetKey == null) {
-                // Fallback to handle identifier matching
-                targetKey = element.getHandleIdentifier();
-                log.debug("Using handle identifier as fallback: {}", targetKey);
-            }
+        // Find the binding key using the element's source range
+        String targetKey = findBindingKey(element, ast, oldName);
+        if (targetKey == null) {
+            // Fallback to handle identifier matching
+            targetKey = element.getHandleIdentifier();
+            log.debug("Using handle identifier as fallback: {}", targetKey);
+        }
 
-            // Sprint 14 (bugs.md #13): when renaming a TYPE, constructor
-            // declarations bear the old type name as their SimpleName but
-            // resolve to a constructor (IMethodBinding), not the type
-            // binding. The standard rename walker (binding-key match against
-            // the renamed symbol) therefore misses them. We pass this flag
-            // into findRenameEdits to enable a second match branch that
-            // emits an edit when the SimpleName resolves to a constructor
-            // whose declaring class matches the renamed type.
-            boolean renamingAType = (element instanceof IType);
+        // Sprint 14 (bugs.md #13): when renaming a TYPE, constructor
+        // declarations bear the old type name as their SimpleName but
+        // resolve to a constructor (IMethodBinding), not the type
+        // binding. The standard rename walker (binding-key match against
+        // the renamed symbol) therefore misses them. We pass this flag
+        // into findRenameEdits to enable a second match branch that
+        // emits an edit when the SimpleName resolves to a constructor
+        // whose declaring class matches the renamed type.
+        boolean renamingAType = (element instanceof IType);
 
-            // Find all references across project
-            Map<String, List<Map<String, Object>>> editsByFile = new LinkedHashMap<>();
-            int totalEdits = 0;
+        // Find all references across the project; collect real JDT edits
+        // per IFile so the contract base can apply them with undo support.
+        Map<IFile, List<TextEdit>> editsByFile = new LinkedHashMap<>();
+        int totalEdits = 0;
 
-            for (Path sourceFile : service.getAllJavaFiles()) {
-                try {
-                    ICompilationUnit sourceCu = service.getCompilationUnit(sourceFile);
-                    if (sourceCu == null) continue;
+        for (Path sourceFile : service.getAllJavaFiles()) {
+            try {
+                ICompilationUnit sourceCu = service.getCompilationUnit(sourceFile);
+                if (sourceCu == null) continue;
 
-                    ASTParser sourceParser = ASTParser.newParser(AST.getJLSLatest());
-                    sourceParser.setSource(sourceCu);
-                    sourceParser.setResolveBindings(true);
-                    sourceParser.setBindingsRecovery(true);
-                    CompilationUnit sourceAst = (CompilationUnit) sourceParser.createAST(null);
+                ASTParser sourceParser = ASTParser.newParser(AST.getJLSLatest());
+                sourceParser.setSource(sourceCu);
+                sourceParser.setResolveBindings(true);
+                sourceParser.setBindingsRecovery(true);
+                CompilationUnit sourceAst = (CompilationUnit) sourceParser.createAST(null);
 
-                    List<Map<String, Object>> fileEdits = findRenameEdits(
-                        sourceAst, targetKey, oldName, newName, renamingAType
-                    );
+                List<TextEdit> fileEdits = findRenameEdits(
+                    sourceAst, targetKey, oldName, newName, renamingAType
+                );
 
-                    if (!fileEdits.isEmpty()) {
-                        String relativePath = service.getPathUtils().formatPath(sourceFile);
-                        editsByFile.put(relativePath, fileEdits);
-                        totalEdits += fileEdits.size();
-                    }
-                } catch (Exception e) {
-                    log.debug("Error finding rename edits in file: {}", e.getMessage());
+                if (!fileEdits.isEmpty() && sourceCu.getResource() instanceof IFile file) {
+                    editsByFile.put(file, fileEdits);
+                    totalEdits += fileEdits.size();
                 }
+            } catch (Exception e) {
+                log.debug("Error finding rename edits in file: {}", e.getMessage());
             }
-
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("oldName", oldName);
-            data.put("newName", newName);
-            data.put("symbolKind", symbolKind);
-            data.put("totalEdits", totalEdits);
-            data.put("filesAffected", editsByFile.size());
-            data.put("editsByFile", editsByFile);
-
-            if (element instanceof IType) {
-                data.put("note", "Renaming a type may require renaming the file as well");
-            }
-
-            return ToolResponse.success(data, ResponseMeta.builder()
-                .totalCount(totalEdits)
-                .returnedCount(totalEdits)
-                .suggestedNextTools(List.of(
-                    "Apply the text edits to complete the rename",
-                    "get_diagnostics to verify no errors after rename"
-                ))
-                .build());
-
-        } catch (Exception e) {
-            log.error("Error renaming symbol: {}", e.getMessage(), e);
-            return ToolResponse.internalError(e);
         }
+
+        if (editsByFile.isEmpty()) {
+            return Preparation.fail(ToolResponse.symbolNotFound(
+                "No occurrences of '" + oldName + "' resolved for renaming"));
+        }
+
+        String summary = "rename " + symbolKind + " '" + oldName + "' -> '" + newName
+            + "' (" + totalEdits + " occurrences in " + editsByFile.size() + " files)";
+        Change change = ChangeEngine.fromFileEdits("rename " + oldName, editsByFile);
+
+        Map<String, Object> extras = new LinkedHashMap<>();
+        extras.put("oldName", oldName);
+        extras.put("newName", newName);
+        extras.put("symbolKind", symbolKind);
+        extras.put("totalEdits", totalEdits);
+        extras.put("filesAffected", editsByFile.size());
+        if (element instanceof IType) {
+            extras.put("note", "Renaming a type does not rename its file — verify with compile_workspace");
+        }
+        return Preparation.of(change, summary, extras);
     }
 
-    private List<Map<String, Object>> findRenameEdits(CompilationUnit ast, String targetKey,
-                                                       String oldName, String newName,
-                                                       boolean renamingAType) {
-        List<Map<String, Object>> edits = new ArrayList<>();
+    private List<TextEdit> findRenameEdits(CompilationUnit ast, String targetKey,
+                                           String oldName, String newName,
+                                           boolean renamingAType) {
+        List<TextEdit> edits = new ArrayList<>();
 
         ast.accept(new ASTVisitor() {
             @Override
@@ -267,28 +279,10 @@ public class RenameSymbolTool extends AbstractTool {
                 }
 
                 if (matches) {
-                    Map<String, Object> edit = new LinkedHashMap<>();
-                    edit.put("line", ast.getLineNumber(node.getStartPosition()) - 1);
-                    edit.put("column", ast.getColumnNumber(node.getStartPosition()));
-                    edit.put("endColumn", ast.getColumnNumber(node.getStartPosition()) + oldName.length());
-                    edit.put("oldText", oldName);
-                    edit.put("newText", newName);
-                    edit.put("startOffset", node.getStartPosition());
-                    edit.put("endOffset", node.getStartPosition() + node.getLength());
-                    edits.add(edit);
+                    edits.add(new ReplaceEdit(node.getStartPosition(), node.getLength(), newName));
                 }
                 return true;
             }
-        });
-
-        // Sort edits by position (reverse order for safe application)
-        edits.sort((a, b) -> {
-            int lineA = (int) a.get("line");
-            int lineB = (int) b.get("line");
-            if (lineA != lineB) return Integer.compare(lineB, lineA);
-            int colA = (int) a.get("column");
-            int colB = (int) b.get("column");
-            return Integer.compare(colB, colA);
         });
 
         return edits;

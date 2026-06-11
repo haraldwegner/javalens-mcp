@@ -5,12 +5,16 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.javalens.core.JdtServiceImpl;
 import org.javalens.mcp.fixtures.TestProjectHelper;
 import org.javalens.mcp.models.ToolResponse;
+import org.javalens.mcp.refactoring.RefactoringChangeCache;
+import org.javalens.mcp.tools.ApplyRefactoringTool;
 import org.javalens.mcp.tools.RenameSymbolTool;
+import org.javalens.mcp.tools.UndoRefactoringTool;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -18,231 +22,193 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration tests for RenameSymbolTool.
- * Tests cross-file rename and identifier validation.
+ * Integration tests for RenameSymbolTool under the Sprint 14b auto-apply
+ * contract: renames are performed against a TEMP COPY of the fixture,
+ * verified on disk, and reverted via the undo handle.
  */
 class RenameSymbolToolTest {
 
     @RegisterExtension
     TestProjectHelper helper = new TestProjectHelper();
 
+    private JdtServiceImpl service;
+    private RefactoringChangeCache cache;
     private RenameSymbolTool tool;
+    private ApplyRefactoringTool applyTool;
+    private UndoRefactoringTool undoTool;
     private ObjectMapper objectMapper;
     private Path projectPath;
-    private String refactoringTargetPath;
-    private String calculatorPath;
+    private Path refactoringTargetFile;
+    private Path helloWorldFile;
+    private Path calculatorFile;
 
     @BeforeEach
     void setUp() throws Exception {
-        JdtServiceImpl service = helper.loadProject("simple-maven");
-        tool = new RenameSymbolTool(() -> service);
+        service = helper.loadProjectCopy("simple-maven");
+        cache = new RefactoringChangeCache();
+        tool = new RenameSymbolTool(() -> service, cache);
+        applyTool = new ApplyRefactoringTool(() -> service, cache);
+        undoTool = new UndoRefactoringTool(() -> service, cache);
         objectMapper = new ObjectMapper();
-        projectPath = helper.getFixturePath("simple-maven");
-        refactoringTargetPath = projectPath.resolve("src/main/java/com/example/RefactoringTarget.java").toString();
-        calculatorPath = projectPath.resolve("src/main/java/com/example/Calculator.java").toString();
+        projectPath = helper.getTempDirectory().resolve("simple-maven");
+        refactoringTargetFile = projectPath.resolve("src/main/java/com/example/RefactoringTarget.java");
+        helloWorldFile = projectPath.resolve("src/main/java/com/example/HelloWorld.java");
+        calculatorFile = projectPath.resolve("src/main/java/com/example/Calculator.java");
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> getData(ToolResponse r) { return (Map<String, Object>) r.getData(); }
 
-    @SuppressWarnings("unchecked")
-    private Map<String, List<Map<String, Object>>> getEditsByFile(Map<String, Object> data) {
-        return (Map<String, List<Map<String, Object>>>) data.get("editsByFile");
+    private ObjectNode renameArgs(Path file, int line, int column, String newName) {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", file.toString());
+        args.put("line", line);
+        args.put("column", column);
+        args.put("newName", newName);
+        return args;
     }
 
-    // ========== Comprehensive Functionality Tests ==========
-
-    // ========== Sprint 14 / bugs.md #13 — constructor post-pass ==========
+    // ========== Auto-apply contract ==========
 
     @Test
-    @DisplayName("Sprint 14 (bugs.md #13): renaming a class also emits edits for its explicit constructors")
-    void renameClass_alsoEmitsConstructorEdits() {
-        // HelloWorld.java declares two explicit constructors at 1-based lines
-        // 12 and 20 (zero-based 11 and 19). Pre-fix, the constructor SimpleNames
-        // resolved to IMethodBinding (the constructor), so the targetKey-match
-        // (against the type binding) missed them. Post-fix the visitor also
-        // matches constructors whose declaring class is the renamed type.
-        String helloWorldPath = projectPath.resolve("src/main/java/com/example/HelloWorld.java").toString();
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", helloWorldPath);
-        args.put("line", 5);    // 0-based: "public class HelloWorld {"
-        args.put("column", 13); // 0-based: H of HelloWorld
-        args.put("newName", "Greeting");
-
-        ToolResponse response = tool.execute(args);
+    @DisplayName("Sprint 14 (bugs.md #13): renaming a class also rewrites its explicit constructors — on disk")
+    void renameClass_alsoRewritesConstructors() throws Exception {
+        // HelloWorld.java declares two explicit constructors. Pre-Sprint-14,
+        // constructor SimpleNames resolved to IMethodBinding (the
+        // constructor), so the targetKey-match missed them. With auto-apply
+        // the proof is the file content itself.
+        ToolResponse response = tool.execute(
+            renameArgs(helloWorldFile, 5, 13, "Greeting"));
 
         assertTrue(response.isSuccess(),
-            "rename HelloWorld → Greeting must succeed; got: " + response.getError());
+            "rename HelloWorld -> Greeting must succeed; got: " + response.getError());
         Map<String, Object> data = getData(response);
+        assertEquals(Boolean.TRUE, data.get("applied"));
         assertEquals("HelloWorld", data.get("oldName"));
         assertEquals("Greeting", data.get("newName"));
         assertEquals("Class", data.get("symbolKind"));
+        assertNotNull(data.get("undoChangeId"));
+        assertFalse(((List<?>) data.get("filesModified")).isEmpty());
 
-        // Find the HelloWorld.java entry in editsByFile by path suffix.
-        Map<String, List<Map<String, Object>>> editsByFile = getEditsByFile(data);
-        String helloKey = editsByFile.keySet().stream()
-            .filter(k -> k.endsWith("HelloWorld.java"))
-            .findFirst()
-            .orElseThrow(() -> new AssertionError(
-                "HelloWorld.java entry missing in editsByFile; keys=" + editsByFile.keySet()));
-        List<Map<String, Object>> helloEdits = editsByFile.get(helloKey);
+        String onDisk = Files.readString(helloWorldFile);
+        assertTrue(onDisk.contains("class Greeting"), "class declaration must be renamed");
+        assertTrue(onDisk.contains("public Greeting()"),
+            "no-arg constructor must be renamed (bugs.md #13)");
+        assertTrue(onDisk.contains("public Greeting(String"),
+            "String-arg constructor must be renamed (bugs.md #13)");
+        assertFalse(onDisk.contains("HelloWorld("), "no constructor keeps the old name");
 
-        java.util.Set<Integer> editLines = new java.util.HashSet<>();
-        for (Map<String, Object> e : helloEdits) {
-            editLines.add(((Number) e.get("line")).intValue());
-            // Each edit must have the correct oldText/newText shape.
-            assertEquals("HelloWorld", e.get("oldText"));
-            assertEquals("Greeting", e.get("newText"));
-        }
-        assertTrue(editLines.contains(11),
-            "Constructor declaration at 0-based line 11 (HelloWorld()) must be in edits; saw lines=" + editLines);
-        assertTrue(editLines.contains(19),
-            "Constructor declaration at 0-based line 19 (HelloWorld(String)) must be in edits; saw lines=" + editLines);
+        String diff = (String) data.get("diff");
+        assertTrue(diff.contains("+public class Greeting") || diff.contains("Greeting"),
+            "diff must document the rename:\n" + diff);
     }
 
     @Test
-    @DisplayName("Sprint 14 (bugs.md #13): renaming a non-type does NOT emit constructor edits (regression guard)")
-    void renameLocalVariable_doesNotEmitConstructorEdits() {
-        // Constructor-rename logic gates on `renamingAType`. When renaming a
-        // local variable (not a type), the constructor branch in the visitor
-        // must NOT fire — even if a constructor happens to share the local's
-        // name. RefactoringTarget.java's `oldName` local variable is a clean
-        // existing test target.
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 88);    // existing test fixture: int oldName = 42;
-        args.put("column", 12);
-        args.put("newName", "renamedLocal");
+    @DisplayName("rename local variable applies on disk and undo restores the original")
+    void renameLocalVariable_appliesAndUndoRestores() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
 
-        ToolResponse response = tool.execute(args);
+        ToolResponse response = tool.execute(
+            renameArgs(refactoringTargetFile, 88, 12, "renamedLocal"));
 
         assertTrue(response.isSuccess(),
-            "rename local variable must succeed; got: " + response.getError());
+            "rename local must succeed; got: " + response.getError());
         Map<String, Object> data = getData(response);
         assertEquals("LocalVariable", data.get("symbolKind"));
-        // No constructor branch should have fired — every edit's oldText is
-        // "oldName" and the edits belong to the local variable's scope.
-        Map<String, List<Map<String, Object>>> editsByFile = getEditsByFile(data);
-        for (List<Map<String, Object>> fileEdits : editsByFile.values()) {
-            for (Map<String, Object> e : fileEdits) {
-                assertEquals("oldName", e.get("oldText"),
-                    "rename of a local must not pick up constructors of a same-name type");
-            }
-        }
-    }
-
-    @Test
-    @DisplayName("rename local variable returns complete response with all edit details")
-    void renameLocalVariable_returnsCompleteResponse() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 88);  // int oldName = 42;
-        args.put("column", 12);
-        args.put("newName", "newName");
-
-        ToolResponse response = tool.execute(args);
-
-        assertTrue(response.isSuccess());
-        Map<String, Object> data = getData(response);
-
-        // Verify symbol info
-        assertEquals("oldName", data.get("oldName"));
-        assertEquals("newName", data.get("newName"));
-        assertEquals("LocalVariable", data.get("symbolKind"));
-
-        // Verify edit counts
         assertTrue((int) data.get("totalEdits") > 0);
-        assertNotNull(data.get("filesAffected"));
-        assertTrue((int) data.get("filesAffected") >= 1);
+        assertEquals(1, data.get("filesAffected"),
+            "local rename must stay in one file — constructor gate regression (bugs.md #13)");
 
-        // Verify edit structure
-        Map<String, List<Map<String, Object>>> editsByFile = getEditsByFile(data);
-        assertFalse(editsByFile.isEmpty());
-        List<Map<String, Object>> edits = editsByFile.values().iterator().next();
-        assertFalse(edits.isEmpty());
+        String renamed = Files.readString(refactoringTargetFile);
+        assertTrue(renamed.contains("renamedLocal"), "new name must be on disk");
+        assertNotEquals(original, renamed);
 
-        Map<String, Object> edit = edits.get(0);
-        assertNotNull(edit.get("line"));
-        assertNotNull(edit.get("column"));
-        assertNotNull(edit.get("endColumn"));
-        assertEquals("oldName", edit.get("oldText"));
-        assertEquals("newName", edit.get("newText"));
+        ToolResponse undone = undoTool.execute(objectMapper.createObjectNode()
+            .put("undoChangeId", (String) data.get("undoChangeId")));
+        assertTrue(undone.isSuccess(), () -> String.valueOf(undone.getError()));
+        assertEquals(original, Files.readString(refactoringTargetFile),
+            "undo must restore the original content byte-for-byte");
     }
 
     @Test
-    @DisplayName("rename field finds all usages and returns field kind")
-    void renameField_findsAllUsagesAndReturnsFieldKind() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 15);  // private String userName;
-        args.put("column", 19);
-        args.put("newName", "userFullName");
+    @DisplayName("auto_apply: false stages without touching disk; apply_refactoring commits")
+    void stagedMode_stagesThenApplies() throws Exception {
+        String original = Files.readString(calculatorFile);
 
-        ToolResponse response = tool.execute(args);
+        ObjectNode args = renameArgs(calculatorFile, 14, 15, "sum");
+        args.put("auto_apply", false);
+        ToolResponse staged = tool.execute(args);
+
+        assertTrue(staged.isSuccess(), () -> String.valueOf(staged.getError()));
+        Map<String, Object> data = getData(staged);
+        assertEquals(Boolean.FALSE, data.get("applied"));
+        String changeId = (String) data.get("changeId");
+        assertNotNull(changeId);
+        assertNull(data.get("undoChangeId"), "staged response has no undo handle yet");
+        assertTrue(((String) data.get("diff")).contains("sum"),
+            "diff must preview the rename");
+        assertEquals(original, Files.readString(calculatorFile),
+            "staging must not touch the file");
+
+        ToolResponse applied = applyTool.execute(
+            objectMapper.createObjectNode().put("changeId", changeId));
+        assertTrue(applied.isSuccess(), () -> String.valueOf(applied.getError()));
+        assertTrue(Files.readString(calculatorFile).contains("sum("),
+            "apply_refactoring must commit the staged rename");
+    }
+
+    @Test
+    @DisplayName("rename field rewrites all usages on disk")
+    void renameField_rewritesAllUsages() throws Exception {
+        ToolResponse response = tool.execute(
+            renameArgs(refactoringTargetFile, 15, 19, "userFullName"));
 
         assertTrue(response.isSuccess());
         Map<String, Object> data = getData(response);
         assertEquals("userName", data.get("oldName"));
-        assertEquals("userFullName", data.get("newName"));
         assertEquals("Field", data.get("symbolKind"));
-        // Field is used in multiple places
-        assertTrue((int) data.get("totalEdits") >= 3);
+        assertTrue((int) data.get("totalEdits") >= 3, "field is used in multiple places");
+
+        String onDisk = Files.readString(refactoringTargetFile);
+        assertTrue(onDisk.contains("userFullName"), "renamed field must be on disk");
     }
 
     @Test
-    @DisplayName("rename method returns method kind")
-    void renameMethod_returnsMethodKind() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", calculatorPath);
-        args.put("line", 14);  // public int add(int a, int b)
-        args.put("column", 15);
-        args.put("newName", "sum");
-
-        ToolResponse response = tool.execute(args);
+    @DisplayName("rename method returns method kind and applies")
+    void renameMethod_returnsMethodKind() throws Exception {
+        ToolResponse response = tool.execute(renameArgs(calculatorFile, 14, 15, "sum"));
 
         assertTrue(response.isSuccess());
         Map<String, Object> data = getData(response);
         assertEquals("add", data.get("oldName"));
         assertEquals("sum", data.get("newName"));
         assertEquals("Method", data.get("symbolKind"));
+        assertTrue(Files.readString(calculatorFile).contains("sum("));
     }
 
     // ========== Validation Tests ==========
 
     @Test
-    @DisplayName("rejects invalid Java identifiers, reserved words, and same name")
-    void rejectsInvalidNames() {
-        // Test invalid identifier (starts with number)
-        ObjectNode args1 = objectMapper.createObjectNode();
-        args1.put("filePath", refactoringTargetPath);
-        args1.put("line", 88);
-        args1.put("column", 12);
-        args1.put("newName", "123invalid");
+    @DisplayName("rejects invalid Java identifiers, reserved words, and same name — without touching disk")
+    void rejectsInvalidNames() throws Exception {
+        String original = Files.readString(refactoringTargetFile);
 
-        ToolResponse response1 = tool.execute(args1);
+        ToolResponse response1 = tool.execute(
+            renameArgs(refactoringTargetFile, 88, 12, "123invalid"));
         assertFalse(response1.isSuccess());
         assertTrue(response1.getError().getMessage().contains("identifier"));
 
-        // Test reserved word
-        ObjectNode args2 = objectMapper.createObjectNode();
-        args2.put("filePath", refactoringTargetPath);
-        args2.put("line", 88);
-        args2.put("column", 12);
-        args2.put("newName", "class");
-
-        ToolResponse response2 = tool.execute(args2);
+        ToolResponse response2 = tool.execute(
+            renameArgs(refactoringTargetFile, 88, 12, "class"));
         assertFalse(response2.isSuccess());
 
-        // Test same name
-        ObjectNode args3 = objectMapper.createObjectNode();
-        args3.put("filePath", refactoringTargetPath);
-        args3.put("line", 88);
-        args3.put("column", 12);
-        args3.put("newName", "oldName");
-
-        ToolResponse response3 = tool.execute(args3);
+        ToolResponse response3 = tool.execute(
+            renameArgs(refactoringTargetFile, 88, 12, "oldName"));
         assertFalse(response3.isSuccess());
         assertTrue(response3.getError().getMessage().contains("Same as current"));
+
+        assertEquals(original, Files.readString(refactoringTargetFile),
+            "rejected renames must not modify the file");
     }
 
     // ========== Required Parameter Tests ==========
@@ -265,7 +231,7 @@ class RenameSymbolToolTest {
     @DisplayName("requires newName parameter")
     void requiresNewName() {
         ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
+        args.put("filePath", refactoringTargetFile.toString());
         args.put("line", 10);
         args.put("column", 5);
 
@@ -280,28 +246,16 @@ class RenameSymbolToolTest {
     @Test
     @DisplayName("handles invalid line/column gracefully")
     void handlesInvalidLineColumn() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", -1);
-        args.put("column", -1);
-        args.put("newName", "test");
-
-        ToolResponse response = tool.execute(args);
-
+        ToolResponse response = tool.execute(
+            renameArgs(refactoringTargetFile, -1, -1, "test"));
         assertFalse(response.isSuccess());
     }
 
     @Test
     @DisplayName("handles no symbol at position")
     void handlesNoSymbolAtPosition() {
-        ObjectNode args = objectMapper.createObjectNode();
-        args.put("filePath", refactoringTargetPath);
-        args.put("line", 1);  // Empty line after package
-        args.put("column", 0);
-        args.put("newName", "test");
-
-        ToolResponse response = tool.execute(args);
-
+        ToolResponse response = tool.execute(
+            renameArgs(refactoringTargetFile, 1, 0, "test"));
         assertFalse(response.isSuccess());
     }
 }

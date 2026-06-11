@@ -53,19 +53,32 @@ public abstract class AbstractApplyingRefactoringTool extends AbstractTool {
         final Change change;
         final String summary;
         final ToolResponse error;
+        final Map<String, Object> extras;
 
-        private Preparation(Change change, String summary, ToolResponse error) {
+        private Preparation(Change change, String summary, ToolResponse error,
+                            Map<String, Object> extras) {
             this.change = change;
             this.summary = summary;
             this.error = error;
+            this.extras = extras;
         }
 
         public static Preparation of(Change change, String summary) {
-            return new Preparation(change, summary, null);
+            return new Preparation(change, summary, null, Map.of());
+        }
+
+        /**
+         * Variant with tool-specific context fields (e.g. oldName/newName/
+         * symbolKind) merged into the response alongside the uniform
+         * contract keys — extras never overwrite contract keys.
+         */
+        public static Preparation of(Change change, String summary, Map<String, Object> extras) {
+            return new Preparation(change, summary, null,
+                extras == null ? Map.of() : extras);
         }
 
         public static Preparation fail(ToolResponse error) {
-            return new Preparation(null, null, error);
+            return new Preparation(null, null, error, Map.of());
         }
     }
 
@@ -105,6 +118,7 @@ public abstract class AbstractApplyingRefactoringTool extends AbstractTool {
             data.put("changeId", changeId);
             data.put("diff", diff);
             data.put("summary", summary);
+            preparation.extras.forEach(data::putIfAbsent);
             return ToolResponse.success(data, ResponseMeta.builder()
                 .suggestedNextTools(List.of(
                     "apply_refactoring with this changeId to commit the staged change",
@@ -134,6 +148,7 @@ public abstract class AbstractApplyingRefactoringTool extends AbstractTool {
         data.put("diff", diff);
         data.put("undoChangeId", undoChangeId);
         data.put("summary", summary);
+        preparation.extras.forEach(data::putIfAbsent);
         return ToolResponse.success(data, ResponseMeta.builder()
             .totalCount(outcome.modifiedFilePaths().size())
             .returnedCount(outcome.modifiedFilePaths().size())

@@ -15,6 +15,7 @@ import org.eclipse.ltk.core.refactoring.PerformChangeOperation;
 import org.eclipse.ltk.core.refactoring.RefactoringStatus;
 import org.eclipse.ltk.core.refactoring.TextChange;
 import org.eclipse.ltk.core.refactoring.TextFileChange;
+import org.eclipse.text.edits.MultiTextEdit;
 import org.javalens.core.IJdtService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -82,6 +84,36 @@ public final class ChangeEngine {
                 collectTextDiffs(child, service, sink);
             }
         }
+    }
+
+    /**
+     * Wrap per-file JDT text edits into a performable Change: one
+     * {@link TextFileChange} per file (edits under a {@link MultiTextEdit}
+     * root), composed into a {@link CompositeChange} when more than one file
+     * is touched. The standard bridge for tools that compute raw
+     * {@link org.eclipse.text.edits.TextEdit}s (Stage A3 migrations).
+     */
+    public static Change fromFileEdits(String changeName,
+                                       Map<IFile, List<org.eclipse.text.edits.TextEdit>> editsByFile) {
+        List<TextFileChange> fileChanges = new ArrayList<>();
+        for (Map.Entry<IFile, List<org.eclipse.text.edits.TextEdit>> entry : editsByFile.entrySet()) {
+            TextFileChange fileChange =
+                new TextFileChange(changeName + ": " + entry.getKey().getName(), entry.getKey());
+            MultiTextEdit root = new MultiTextEdit();
+            for (org.eclipse.text.edits.TextEdit edit : entry.getValue()) {
+                root.addChild(edit);
+            }
+            fileChange.setEdit(root);
+            fileChanges.add(fileChange);
+        }
+        if (fileChanges.size() == 1) {
+            return fileChanges.get(0);
+        }
+        CompositeChange composite = new CompositeChange(changeName);
+        for (TextFileChange fileChange : fileChanges) {
+            composite.add(fileChange);
+        }
+        return composite;
     }
 
     /** Files a change will touch, derived from the change tree (pre-apply). */

@@ -376,7 +376,7 @@ public class JavaLensApplication implements IApplication {
         toolRegistry.register(new FindTestsTool(() -> jdtService));
 
         // Refactoring tools
-        toolRegistry.register(new RenameSymbolTool(() -> jdtService));
+        toolRegistry.register(new RenameSymbolTool(() -> jdtService, refactoringChangeCache));
         toolRegistry.register(new OrganizeImportsTool(() -> jdtService));
         toolRegistry.register(new ExtractVariableTool(() -> jdtService));
         toolRegistry.register(new ExtractMethodTool(() -> jdtService));
