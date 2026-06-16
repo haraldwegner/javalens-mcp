@@ -7,6 +7,36 @@ For each entry include: ID, date observed, severity, reproducer, expected vs act
 
 ---
 
+## #15 — `change_method_signature` mangles a constructor into an illegal method (adds a return type, skips the call site)
+
+- **Status:** OPEN (targeted: v1.10.0 — Sprint 15; sits with the #13 constructor-handling line).
+- **Date observed:** 2026-06-16 (live agent session on the strategies workspace).
+- **Reporter:** Harald (live usage); reverted manually.
+- **Severity:** HIGH — produces non-compiling source and silently leaves a stale call site; a manual revert is the only recovery if `undo_refactoring` isn't used.
+- **Environment:** fork v1.9.0, jl-strategies-orb workspace.
+
+### Reproducer
+
+`change_method_signature` on the no-arg constructor `AlpacaRunner()` to add a `String` parameter.
+
+### Expected
+
+The constructor gains the parameter — `AlpacaRunner(String x)` — staying a constructor (no return type), and every `new AlpacaRunner(...)` call site is updated to pass the new argument.
+
+### Actual
+
+The tool rewrote the declaration to `void AlpacaRunner(String)` — **prepended a `void` return type, converting the constructor into an illegal (same-name-as-type) method** — and did **not** update the call site. Result: source no longer compiles; the `new AlpacaRunner()` invocation was left unchanged.
+
+### Suspected root cause
+
+The signature-change edit path treats every member as a method: it unconditionally writes a return type and resolves call sites as method invocations. Constructors (no return type; invoked via `new` / `this(...)` / `super(...)`) need a distinct branch. Mirrors the constructor blind spot already logged in #13 (`rename_symbol`) — constructor handling is a recurring gap across the refactoring tools.
+
+### Fix direction
+
+In `ChangeMethodSignatureTool`: detect `IMethod.isConstructor()` and (a) never emit a return type for it, (b) resolve call sites as constructor invocations (`new` / `this` / `super`) rather than method calls. Add a constructor fixture regression alongside the #13 rename test.
+
+---
+
 ## #14 — `health_check` reports a hardcoded `version: "2.0.0-SNAPSHOT"`
 
 - **Status:** OPEN (targeted: v1.10.0 — one-liner: reuse `McpProtocolHandler.serverVersion()`)
