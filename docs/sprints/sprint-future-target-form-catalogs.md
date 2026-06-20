@@ -24,7 +24,7 @@ find_target_candidates(catalog, kind, projectKey?, threshold?)
 get_target_recipe(catalog, kind, target_location)
   → returns canonical Fowler-primitive sequence to apply, plus catalog-specified target shape
 plan_refactoring(target_location, recipe_id)
-  → ties to Sprint 17 multi-step orchestration framework
+  → ties to Sprint 18 multi-step orchestration framework
 ```
 
 Where `catalog` is one of `{fowler_smell, kerievsky_pattern, kerievsky_anti, gof, solid, grasp, beck_simple, ddd_violation, layer_violation, modernisation, project_convention, anti_pattern}`. Each catalog's kinds are a typed enum in the schema.

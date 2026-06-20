@@ -270,7 +270,7 @@ v1.7.1 shipped the workaround dispatch (Maven side returns `INVALID_PARAMETER` w
 
 **Closes:** Sprint 14 scope amendment 2026-06-04. Was previously "Out of scope" for Sprint 15+.
 
-**Companion workflow** (not in this sprint, but immediately after): the natural `replace_duplicates(cloneGroupId, options)` companion that takes a clone group and runs extract-method + per-clone replace ships in **Sprint 14a** (v1.9.0) alongside the refactoring auto-apply layer. Detection (B.3, this sprint, v1.8.0) ships first; the replacement workflow closes the loop one release cycle later. See [`sprint-14a-refactoring-full-apply.md`](sprint-14a-refactoring-full-apply.md).
+**Companion workflow** (not in this sprint, but immediately after): the natural `replace_duplicates(cloneGroupId, options)` companion that takes a clone group and runs extract-method + per-clone replace ships in **Sprint 14b** (v1.9.0) alongside the refactoring auto-apply layer. Detection (B.3, this sprint, v1.8.0) ships first; the replacement workflow closes the loop one release cycle later. See [`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md).
 
 **Test:** `FindDuplicateCodeToolTest`:
 - `detects_obvious_clone_within_project` — fixture with two `getName()` methods differing only in field name → flagged with similarity ~1.0.

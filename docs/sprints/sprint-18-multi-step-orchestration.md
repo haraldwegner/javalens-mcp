@@ -30,10 +30,10 @@ A failed step at index N requires undoing steps N-1, N-2, … back to pre-refact
 
 ## Dependencies
 
-- **Builds on Sprint 14a's apply primitives** — the `Change` cache, `apply_refactoring`, `undo_refactoring`, and `inspect_refactoring` tools shipped in 14a (v1.9.0) are the foundation. Sprint 17's `apply_refactoring_plan` is thin glue that calls per-step refactor tools with `auto_apply: false`, stages the resulting changeIds, commits them atomically (or rolls back). Without 14a, this sprint would have to ship the apply layer itself.
-- **Independent of Sprint 14 and 15 content** beyond the 14a foundation.
-- **Gates** Sprint 18 (Kerievsky pattern recipes need orchestration to execute).
-- Reuses Sprint 11 `AbstractRefactoringTool` LTK plumbing (via 14a's retrofit of all 15 refactor tools).
+- **Builds on Sprint 14b's apply primitives** — the `Change` cache, `apply_refactoring`, `undo_refactoring`, and `inspect_refactoring` tools shipped in 14b (v1.9.0) are the foundation. This sprint's `apply_refactoring_plan` is thin glue that calls per-step refactor tools with `auto_apply: false`, stages the resulting changeIds, commits them atomically (or rolls back). Without 14b, this sprint would have to ship the apply layer itself.
+- **Independent of Sprint 14 and 15 content** beyond the 14b foundation.
+- **Gates** Sprint 19 (Kerievsky pattern recipes need orchestration to execute).
+- Reuses Sprint 11 `AbstractRefactoringTool` LTK plumbing (via 14b's retrofit of all 15 refactor tools).
 
 ## Acceptance signal
 
@@ -44,4 +44,4 @@ A failed step at index N requires undoing steps N-1, N-2, … back to pre-refact
 ## Source planning notes
 
 - Manager [`docs/sprints/future-sprint-enhancements.md`](../../../javalens-manager/docs/sprints/future-sprint-enhancements.md) — "Multi-step MCP tools — feasibility" section.
-- Related: [`sprint-future-refactoring-full-apply.md`](sprint-future-refactoring-full-apply.md) (the simpler preview→apply flow for single-step refactorings). That can ship first and provide the per-step change-cache that orchestration builds on top of.
+- Related: [`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md) (the simpler preview→apply flow for single-step refactorings) — SHIPPED in v1.9.0; it already provides the per-step change-cache that this orchestration builds on top of.

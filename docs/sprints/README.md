@@ -15,7 +15,7 @@ This directory holds the fork's sprint docs and scaffold plans. Closed sprints f
 
 ## Next (immediately after v1.8.0)
 
-- [`sprint-14a-refactoring-full-apply.md`](sprint-14a-refactoring-full-apply.md) — **v1.9.0** target. Uniform auto-apply-by-default + undo handle for every refactoring tool. Closes the gap where 10 of 15 local refactor tools today return text-edit descriptions and force the agent to hand-apply. Opt-in `auto_apply: false` for staged-refactor / impact-analysis workflows. **Ships `replace_duplicates(cloneGroupId)`** so the Sprint 14 B.3 `find_duplicate_code` workflow closes in v1.9.0. **~10-11 days** — all plumbing on top of JDT-LTK's existing apply + undo engine. Establishes the durable **refactoring tool contract** (apply path mandatory for every new refactor tool going forward).
+- [`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md) — **v1.9.0** (SHIPPED). Uniform auto-apply-by-default + undo handle for every refactoring tool. Closes the gap where 10 of 15 local refactor tools today return text-edit descriptions and force the agent to hand-apply. Opt-in `auto_apply: false` for staged-refactor / impact-analysis workflows. **Ships `replace_duplicates(cloneGroupId)`** so the Sprint 14 B.3 `find_duplicate_code` workflow closes in v1.9.0. **~10-11 days** — all plumbing on top of JDT-LTK's existing apply + undo engine. Establishes the durable **refactoring tool contract** (apply path mandatory for every new refactor tool going forward).
 
 ## Future (scaffolds — theme + summary, not actionable plans)
 
@@ -23,15 +23,16 @@ Sequencing is suggestive, not committed. Each scaffold names its dependencies; s
 
 | Scaffold | Theme | Depends on |
 |---|---|---|
-| [`sprint-15-fowler-smell-detection.md`](sprint-15-fowler-smell-detection.md) | **Phase 0**: upstream-parity audit (1-2 days). **Phase A**: 18-tool Fowler smell catalog. Highest single leverage gap. | Independent |
-| [`sprint-16-modernisation-sweeps.md`](sprint-16-modernisation-sweeps.md) | Find-and-batch-apply for `var` / records / sealed types / pattern-matching switch. May pair with [`sprint-future-refactoring-full-apply.md`](sprint-future-refactoring-full-apply.md) if that lands first. | Independent |
-| [`sprint-17-multi-step-orchestration.md`](sprint-17-multi-step-orchestration.md) | `plan_refactoring` + `apply_refactoring_plan` + rollback — framework gate | [`sprint-future-refactoring-full-apply.md`](sprint-future-refactoring-full-apply.md) (the Change cache) |
-| [`sprint-18-kerievsky-refactoring-to-patterns.md`](sprint-18-kerievsky-refactoring-to-patterns.md) | Pattern-targeted multi-step refactorings (toward + away from patterns) | Sprint 17 framework |
-| [`sprint-19-solid-detection.md`](sprint-19-solid-detection.md) | 5-principle violation detection (SRP, OCP, LSP, ISP, DIP) | Sprint 15's heuristic infrastructure |
+| [`sprint-15-modernisation-sweeps.md`](sprint-15-modernisation-sweeps.md) | Find-and-batch-apply for `var` / records / sealed types / pattern-matching switch. The **final javalens-branded release (v1.10.0)**; also carries the Cursor-DX block + bug #1/#3. | Builds on 14b apply/undo |
+| [`sprint-16-goja-rebrand.md`](sprint-16-goja-rebrand.md) | GOJA rebrand + parametric tool consolidation. Closes the javalens-mcp brand at v1.10.0 and resets the line to **goja-mcp v1.0**. | Sprint 15 |
+| [`sprint-17-fowler-smell-detection.md`](sprint-17-fowler-smell-detection.md) | 18-tool Fowler smell catalog. First big content release under GOJA. Highest single-leverage gap. | Independent (post-rebrand) |
+| [`sprint-18-multi-step-orchestration.md`](sprint-18-multi-step-orchestration.md) | `plan_refactoring` + `apply_refactoring_plan` + rollback — the multi-step framework gate (e.g. the `safe_refactor` test-gated loop). | 14b Change cache + Sprint 17 smells |
+| [`sprint-19-kerievsky-refactoring-to-patterns.md`](sprint-19-kerievsky-refactoring-to-patterns.md) | Pattern-targeted multi-step refactorings (toward + away from patterns). | Sprint 18 framework |
+| [`sprint-20-solid-detection.md`](sprint-20-solid-detection.md) | 5-principle violation detection (SRP, OCP, LSP, ISP, DIP). | Sprint 17 smell infrastructure |
 | [`sprint-future-android-readonly.md`](sprint-future-android-readonly.md) | Manifest / resource / layout / lifecycle / binding read-only tools | Sprint 14 Gradle path (shipped v1.8.0 Phase C) |
-| [`sprint-future-http-sse-transport.md`](sprint-future-http-sse-transport.md) | HTTP/SSE transport sidesteps sandboxed-agent stdio spawn breakage | Independent |
-| [`sprint-future-upstream-parity-audit.md`](sprint-future-upstream-parity-audit.md) | Audit vs pzalutski-pixel/javalens-mcp v1.3.5. **Runs as Phase 0 of Sprint 15** (1-2 days); cheap cherry-picks fold in; Bazel/AP rework defers to Sprint 16 if needed. | Folded into Sprint 15 |
-| [`sprint-future-target-form-catalogs.md`](sprint-future-target-form-catalogs.md) | Parametric `find_target_candidates(catalog, kind)` consolidation | Sprints 15-19 ship the detection content first |
+| [`sprint-future-target-form-catalogs.md`](sprint-future-target-form-catalogs.md) | Parametric `find_target_candidates(catalog, kind)` consolidation | Sprints 15-20 ship the detection content first |
+
+*(Shipped, removed from this table: HTTP/SSE transport → v1.8.5 ([`sprint-14a-http-sse-transport.md`](sprint-14a-http-sse-transport.md)); refactoring full-apply → v1.9.0 ([`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md)); upstream-parity audit → ran in 14b against v1.4.2 ([`../upstream-parity-v1.4.2.md`](../upstream-parity-v1.4.2.md)).)*
 
 ## Shipped
 

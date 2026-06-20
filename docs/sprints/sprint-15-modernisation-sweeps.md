@@ -43,7 +43,7 @@ Acceptance: re-run the documented friction cases from the feedback doc verbatim 
 
 - **Standalone** — no prerequisite from Sprint 14, 15, or 17.
 - Java-language-version sensitive: each tool reads the project's `release` target and only suggests applicable modernisations.
-- Composable with Sprint 17 multi-step orchestration if/when the framework lands — batch-apply becomes an orchestrated multi-step refactoring.
+- Composable with Sprint 18 multi-step orchestration if/when the framework lands — batch-apply becomes an orchestrated multi-step refactoring.
 
 ## Acceptance signal
 

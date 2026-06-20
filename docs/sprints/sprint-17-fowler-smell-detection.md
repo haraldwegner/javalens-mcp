@@ -29,7 +29,7 @@ Decided 2026-06-04 to bundle the **upstream-parity audit** (see [`sprint-future-
 
 - Highest single-sprint leverage gain per the manager's [`future-sprint-enhancements.md`](../../../javalens-manager/docs/sprints/future-sprint-enhancements.md) sequencing recommendation.
 - Each smell-detection tool is independent — ~1-2 days of JDT-AST work each — so the sprint scales linearly with how many smells we include.
-- Foundation for Sprint 18 (Kerievsky patterns) — smell detection feeds the "where do I apply this pattern?" question.
+- Foundation for Sprint 19 (Kerievsky patterns) — smell detection feeds the "where do I apply this pattern?" question.
 - Forward-compatible with target-form catalogs (see [`sprint-future-target-form-catalogs.md`](sprint-future-target-form-catalogs.md)) — these 18 tools later become catalog-kinds under the parametric framing.
 
 ## Candidate items (rough first pass)

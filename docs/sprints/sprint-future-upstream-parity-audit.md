@@ -21,7 +21,7 @@ Upstream additions since v1.2 vs our coverage:
 | Bazel build-system support | **Listed in our README's build-system table** but needs verification — README line may be aspirational. Phase 0 audit confirms. |
 | Comprehensive "generated sources" + "annotation processor" handling across Maven, Gradle, Bazel | **Partial.** Maven via classpath; PDE via `.classpath`; Gradle Tooling API. Annotation-processor source roots may have gaps worth auditing. |
 | AI training-bias warning section in README | **Already present** in our README (Sprint 11-era addition). |
-| Refactoring preview→apply gate (Eclipse-IDE-style) | **Not present in either repo.** This is our differentiator opportunity — see [`sprint-future-refactoring-full-apply.md`](sprint-future-refactoring-full-apply.md). Note for the audit: confirm upstream doesn't have it either by inspecting their refactor tool implementations. |
+| Refactoring preview→apply gate (Eclipse-IDE-style) | **Our differentiator — SHIPPED in v1.9.0** ([`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md)); the v1.4.2 audit confirmed upstream still hand-applies edits. | 
 
 ## Candidate items
 

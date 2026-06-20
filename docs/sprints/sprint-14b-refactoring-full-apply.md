@@ -100,7 +100,7 @@ The user is not in this loop. They asked the agent to do X; the agent did X and 
 
 Every refactor tool accepts `auto_apply: bool` (default `true`). When `false`, the tool caches the Change but does NOT perform it; returns `{ changeId, diff, summary }` only. The agent uses this when its own workflow needs preview-without-apply:
 
-- Staging multiple refactors to apply atomically (build N changes, then apply in a transaction via Sprint 17's orchestrator).
+- Staging multiple refactors to apply atomically (build N changes, then apply in a transaction via Sprint 18's orchestrator).
 - Inspecting a complex multi-file diff before committing (e.g. a `move_class` that touches 40+ files — the agent wants to sanity-check what the rewrite affected).
 - Impact analysis (caller asked "what would this rename affect?" — agent calls `auto_apply: false`, returns the diff to the user, awaits direction).
 
@@ -147,7 +147,7 @@ What we build (the orchestration layer):
 | Tests — new tool smokes + per-existing-tool round-trip + verify-then-undo loop + replace_duplicates round-trip | ~2 days | |
 | Docs / release notes | ~0.5 day | |
 
-**Total: ~10-11 days.** Fits one sprint comfortably. Almost all of it is plumbing on top of JDT-LTK's apply + undo engine. Strong cost/benefit case: small effort, large UX + correctness payoff, foundation for Sprint 17 orchestration ships as a side effect, AND the `find_duplicate_code` → `replace_duplicates` workflow closes in v1.9.0.
+**Total: ~10-11 days.** Fits one sprint comfortably. Almost all of it is plumbing on top of JDT-LTK's apply + undo engine. Strong cost/benefit case: small effort, large UX + correctness payoff, foundation for Sprint 18 orchestration ships as a side effect, AND the `find_duplicate_code` → `replace_duplicates` workflow closes in v1.9.0.
 
 ## Candidate items
 
@@ -195,7 +195,7 @@ Tools NOT subject to this policy (re-stated from Scope section above): `find_*`,
 - **Sprint 14 (v1.8.0) ships first**; Sprint 14a (v1.9.0) follows immediately.
 - **Audits Sprint 13 codegen tools** (Ring 2 — generate_constructor etc.) during Stage 0: if they already auto-apply via `ASTRewrite.apply()` (likely), retrofit to capture undo handle. If they return TextEdit collections, full retrofit.
 - **Closes the find_duplicate_code workflow** — Sprint 14 B.3 ships detection in v1.8.0; this sprint's `replace_duplicates` composite ships the removal step in v1.9.0. The loop closes one release cycle after detection.
-- **Enables Sprint 17 multi-step orchestration** — the in-memory Change cache + `apply_refactoring` / `inspect_refactoring` / `undo_refactoring` primitives are exactly what `apply_refactoring_plan` needs. Sprint 17 becomes thin glue on top.
+- **Enables Sprint 18 multi-step orchestration** — the in-memory Change cache + `apply_refactoring` / `inspect_refactoring` / `undo_refactoring` primitives are exactly what `apply_refactoring_plan` needs. Sprint 18 becomes thin glue on top.
 
 ## Acceptance signal
 
@@ -213,4 +213,4 @@ Tools NOT subject to this policy (re-stated from Scope section above): `find_*`,
 - Triggered by user observation 2026-06-04 (fork Sprint 14 Q4 review): existing refactor tools return location strings, not actions; Eclipse IDE flow is preview→simulate→agree→apply.
 - Reframed 2026-06-04 (follow-up): the "preview→agree" gate is for humans; the agent's equivalent is "refactor → verify → undo if broken". Auto-apply by default; undo handle as safety net; opt-in preview only when the agent's own workflow needs it.
 - Promoted to Sprint 14a 2026-06-04 (next user message): scope decision to immediately follow v1.8.0; durable policy attached; `replace_duplicates` composite added so the find-duplicate-code workflow closes in the same release as the apply layer.
-- Forward link: [`sprint-17-multi-step-orchestration.md`](sprint-17-multi-step-orchestration.md) — the generic multi-step orchestration framework still belongs to Sprint 17 (rollback semantics, plan inspection, dry-run-all-then-apply transactions). 14a ships a specific composite (`replace_duplicates`) using ad-hoc step-by-step rollback; Sprint 17 generalises to arbitrary plans.
+- Forward link: [`sprint-18-multi-step-orchestration.md`](sprint-18-multi-step-orchestration.md) — the generic multi-step orchestration framework still belongs to Sprint 18 (rollback semantics, plan inspection, dry-run-all-then-apply transactions). 14b ships a specific composite (`replace_duplicates`) using ad-hoc step-by-step rollback; Sprint 18 generalises to arbitrary plans.

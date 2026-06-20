@@ -39,7 +39,7 @@ The "away" direction is what distinguishes Kerievsky from GoF. Detection rules f
 
 ## Dependencies
 
-- **Requires Sprint 17** (orchestration framework). Each Kerievsky transformation is a multi-step plan; the orchestrator executes them.
+- **Requires Sprint 18** (orchestration framework). Each Kerievsky transformation is a multi-step plan; the orchestrator executes them.
 - Builds on Sprint 15's smell detection (smell at a location → applicable Kerievsky pattern).
 - Builds on existing Sprint 11 LTK refactorings (move, extract, encapsulate) — these are the primitives the recipes call.
 
