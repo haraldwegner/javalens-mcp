@@ -80,8 +80,24 @@ public final class FqnResolver {
 
         int hashIdx = fqn.indexOf('#');
         if (hashIdx < 0) {
-            // Type-only form
-            return resolveType(fqn, projects).map(t -> (IJavaElement) t);
+            // Type-only form (e.g. "com.foo.Bar").
+            Optional<IType> typeOnly = resolveType(fqn, projects);
+            if (typeOnly.isPresent()) {
+                return typeOnly.map(t -> (IJavaElement) t);
+            }
+            // Sprint 15 DX#1: dot-form member fallback. Agents naturally write
+            // "com.foo.Bar.method" / "com.foo.Bar.field" instead of the
+            // "#" separator form. When the whole string is not a type, treat
+            // the last dot segment as a member of the type formed by the
+            // preceding segments.
+            int lastDot = fqn.lastIndexOf('.');
+            if (lastDot > 0) {
+                Optional<IType> outer = resolveType(fqn.substring(0, lastDot), projects);
+                if (outer.isPresent()) {
+                    return resolveMemberByName(outer.get(), fqn.substring(lastDot + 1));
+                }
+            }
+            return Optional.empty();
         }
 
         String typeFqn = fqn.substring(0, hashIdx);
@@ -107,17 +123,22 @@ public final class FqnResolver {
             return resolveMethod(type, methodName, paramFqns).map(m -> (IJavaElement) m);
         }
 
-        // Member name alone — try method first (any overload), then field.
+        // Member name alone — method first (any overload), then field.
+        return resolveMemberByName(type, memberPart);
+    }
+
+    /** Resolve a bare member name on a type: method (any overload) first, then field. */
+    private static Optional<IJavaElement> resolveMemberByName(IType type, String memberName) {
         try {
             for (IMethod m : type.getMethods()) {
-                if (memberPart.equals(m.getElementName())) {
+                if (memberName.equals(m.getElementName())) {
                     return Optional.of(m);
                 }
             }
         } catch (Exception e) {
-            log.debug("Error iterating methods of {}: {}", typeFqn, e.getMessage());
+            log.debug("Error iterating methods of {}: {}", type.getElementName(), e.getMessage());
         }
-        IField field = type.getField(memberPart);
+        IField field = type.getField(memberName);
         if (field != null && field.exists()) {
             return Optional.of(field);
         }

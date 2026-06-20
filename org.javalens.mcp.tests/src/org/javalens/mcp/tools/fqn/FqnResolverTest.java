@@ -89,6 +89,47 @@ class FqnResolverTest {
         assertEquals("greeting", resolved.get().getElementName());
     }
 
+    // ===== Sprint 15 DX#1: dot-form member fallback =====
+    // Agents naturally write `Type.method` / `Type.field` (dot), not the `#`
+    // form. These must resolve the same as the `#` forms above.
+
+    @Test
+    @DisplayName("DX#1: dot-form method FQN resolves (com.example.HelloWorld.getGreeting)")
+    void dotFormMethod_resolves() {
+        Optional<IJavaElement> resolved =
+            FqnResolver.resolveWorkspace("com.example.HelloWorld.getGreeting", service);
+        assertTrue(resolved.isPresent(), "dot-form method FQN must resolve");
+        assertTrue(resolved.get() instanceof IMethod, "must be an IMethod");
+        assertEquals("getGreeting", resolved.get().getElementName());
+    }
+
+    @Test
+    @DisplayName("DX#1: dot-form field FQN resolves (com.example.HelloWorld.greeting)")
+    void dotFormField_resolves() {
+        Optional<IJavaElement> resolved =
+            FqnResolver.resolveWorkspace("com.example.HelloWorld.greeting", service);
+        assertTrue(resolved.isPresent(), "dot-form field FQN must resolve");
+        assertTrue(resolved.get() instanceof IField, "must be an IField");
+        assertEquals("greeting", resolved.get().getElementName());
+    }
+
+    @Test
+    @DisplayName("DX#1: type-only dot FQN still resolves to the type (no regression)")
+    void dotForm_typeStillResolvesToType() {
+        Optional<IJavaElement> resolved =
+            FqnResolver.resolveWorkspace("com.example.HelloWorld", service);
+        assertTrue(resolved.isPresent());
+        assertTrue(resolved.get() instanceof IType, "type-only form must stay a type, not a member");
+    }
+
+    @Test
+    @DisplayName("DX#1: dot form with unknown trailing member returns empty")
+    void dotForm_unknownMember_returnsEmpty() {
+        Optional<IJavaElement> resolved =
+            FqnResolver.resolveWorkspace("com.example.HelloWorld.noSuchMember", service);
+        assertFalse(resolved.isPresent(), "unknown dot-form member must not resolve");
+    }
+
     @Test
     @DisplayName("unknown type FQN returns empty")
     void unknownType_returnsEmpty() {
