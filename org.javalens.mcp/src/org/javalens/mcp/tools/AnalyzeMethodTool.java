@@ -134,10 +134,38 @@ public class AnalyzeMethodTool extends AbstractTool {
             // Get element at position
             IJavaElement element = service.getElementAtPosition(path, line, column);
             if (!(element instanceof IMethod method)) {
-                return ToolResponse.invalidParameter("position", "Position is not on a method");
+                // Sprint 15 DX#4 + DX#5: don't hard-fail with a bare error.
+                // Mirror the bug-#12 graceful-degradation pattern — return the
+                // nearby method candidates (with exact retry line/column) and an
+                // example of the expected argument shape, so the agent can
+                // self-correct instead of giving up.
+                Map<String, Object> miss = new LinkedHashMap<>();
+                miss.put("resolved", false);
+                miss.put("reason", "Position (line " + line + ", column " + column
+                    + ") is not on a method"
+                    + (element != null ? " — resolved '" + element.getElementName() + "' instead" : ""));
+                miss.put("nearbyMethodCandidates", nearbyMethodCandidates(cu, line, service));
+                Map<String, Object> example = new LinkedHashMap<>();
+                example.put("filePath", filePath);
+                example.put("line", "<0-based line of a method name>");
+                example.put("column", "<0-based column on the method name>");
+                miss.put("exampleArgs", example);
+                return ToolResponse.success(miss, ResponseMeta.builder()
+                    .suggestedNextTools(List.of(
+                        "Re-call analyze_method with a nearbyMethodCandidates line/column",
+                        "get_document_symbols to list every method in the file",
+                        "analyze_type to inspect the whole declaring type"))
+                    .build());
             }
 
             Map<String, Object> data = new LinkedHashMap<>();
+
+            // Sprint 15 DX#3: echo the symbol actually resolved at this position
+            // so the agent can detect a mis-resolution before trusting the
+            // analysis (the cursor-feedback failure mode: a near-miss column
+            // silently resolved a different symbol).
+            data.put("resolvedSymbol",
+                method.getDeclaringType().getFullyQualifiedName() + "#" + method.getElementName());
 
             // Method info
             data.put("method", createMethodInfo(method, service, cu));
@@ -176,6 +204,46 @@ public class AnalyzeMethodTool extends AbstractTool {
             log.error("Error analyzing method: {}", e.getMessage(), e);
             return ToolResponse.internalError(e);
         }
+    }
+
+    /**
+     * Sprint 15 DX#4: up to 3 methods nearest the requested line, each with the
+     * exact zero-based (line, column) of its name so the agent can retry
+     * analyze_method precisely instead of guessing coordinates.
+     */
+    private List<Map<String, Object>> nearbyMethodCandidates(ICompilationUnit cu, int targetLine,
+                                                             IJdtService service) {
+        List<Map<String, Object>> all = new ArrayList<>();
+        try {
+            for (IType type : cu.getAllTypes()) {
+                for (IMethod m : type.getMethods()) {
+                    var nameRange = m.getNameRange();
+                    if (nameRange == null) {
+                        continue;
+                    }
+                    int nameOffset = nameRange.getOffset();
+                    Map<String, Object> c = new LinkedHashMap<>();
+                    c.put("name", m.getElementName());
+                    c.put("declaringType", type.getElementName());
+                    c.put("line", service.getLineNumber(cu, nameOffset));
+                    c.put("column", service.getColumnNumber(cu, nameOffset));
+                    c.put("_distance", Math.abs(service.getLineNumber(cu, nameOffset) - targetLine));
+                    all.add(c);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("nearbyMethodCandidates failed: {}", e.getMessage());
+        }
+        all.sort((a, b) -> Integer.compare((int) a.get("_distance"), (int) b.get("_distance")));
+        List<Map<String, Object>> top = new ArrayList<>();
+        for (Map<String, Object> c : all) {
+            c.remove("_distance");
+            top.add(c);
+            if (top.size() >= 3) {
+                break;
+            }
+        }
+        return top;
     }
 
     private Map<String, Object> createMethodInfo(IMethod method, IJdtService service, ICompilationUnit cu)

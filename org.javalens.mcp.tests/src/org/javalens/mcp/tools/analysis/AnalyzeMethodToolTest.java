@@ -109,12 +109,44 @@ class AnalyzeMethodToolTest {
         badFile.put("line", 14);
         badFile.put("column", 15);
         assertFalse(tool.execute(badFile).isSuccess());
+    }
 
-        // Position not on method
-        ObjectNode notMethod = objectMapper.createObjectNode();
-        notMethod.put("filePath", calculatorPath);
-        notMethod.put("line", 0);
-        notMethod.put("column", 0);
-        assertFalse(tool.execute(notMethod).isSuccess());
+    // ===== Sprint 15 Cursor-DX block =====
+
+    @Test @DisplayName("DX#3: success echoes the resolved symbol")
+    void echoesResolvedSymbol() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", calculatorPath);
+        args.put("line", 14);   // add method
+        args.put("column", 15);
+
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess());
+        assertEquals("com.example.Calculator#add", getData(r).get("resolvedSymbol"),
+            "response must lead with the symbol actually resolved at the position");
+    }
+
+    @Test @DisplayName("DX#4 + DX#5: position-miss returns nearby candidates + example, not a bare error")
+    void positionMiss_returnsNearbyCandidatesAndExample() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", calculatorPath);
+        args.put("line", 0);    // package/import line — not on a method
+        args.put("column", 0);
+
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(), "graceful degradation: success with guidance, not a hard error");
+        Map<String, Object> data = getData(r);
+        assertEquals(false, data.get("resolved"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> candidates =
+            (List<Map<String, Object>>) data.get("nearbyMethodCandidates");
+        assertNotNull(candidates);
+        assertFalse(candidates.isEmpty(), "Calculator has methods → must offer candidates");
+        Map<String, Object> first = candidates.get(0);
+        assertNotNull(first.get("name"));
+        assertNotNull(first.get("line"));    // exact retry coordinates
+        assertNotNull(first.get("column"));
+        assertNotNull(data.get("exampleArgs"), "must include an example arg shape (DX#5)");
     }
 }
