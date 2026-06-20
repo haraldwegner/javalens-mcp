@@ -209,8 +209,10 @@ public class McpProtocolHandler {
      * Server version for the initialize handshake, resolved from the OSGi
      * bundle manifest. Falls back to the JAR Implementation-Version, then
      * "unknown" on plain-classpath runtimes (unit tests) — never hardcoded.
+     * Public so HealthCheckTool (different package) reports the same value
+     * the initialize handshake does (bugs.md #14).
      */
-    static String serverVersion() {
+    public static String serverVersion() {
         try {
             Bundle bundle = FrameworkUtil.getBundle(McpProtocolHandler.class);
             if (bundle != null) {

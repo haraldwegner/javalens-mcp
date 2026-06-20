@@ -215,4 +215,75 @@ class ChangeMethodSignatureToolTest {
 
         assertFalse(response.isSuccess());
     }
+
+    // ========== bugs.md #15: constructor handling ==========
+
+    private Path ctorFile() {
+        // InterfaceExtractTarget has `public InterfaceExtractTarget(String name)`
+        // (0-based line 16) + a `new InterfaceExtractTarget(name)` call site.
+        return helper.getTempDirectory()
+            .resolve("simple-maven/src/main/java/com/example/InterfaceExtractTarget.java");
+    }
+
+    private ObjectNode ctorArgs() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("filePath", ctorFile().toString());
+        args.put("line", 16);    // public InterfaceExtractTarget(String name)
+        args.put("column", 20);  // inside the constructor name
+        return args;
+    }
+
+    @Test
+    @DisplayName("#15: constructor stays a constructor (no `void`) + new-expression call site updated; undo restores")
+    void constructorParamTypeChange_staysConstructor_updatesCallSite_undoRestores() throws Exception {
+        Path file = ctorFile();
+        String original = Files.readString(file);
+
+        ObjectNode args = ctorArgs();
+        ArrayNode params = args.putArray("newParameters");
+        params.add(param("name", "CharSequence")); // String -> CharSequence, same name
+
+        ToolResponse response = tool.execute(args);
+        assertTrue(response.isSuccess(), () -> String.valueOf(response.getError()));
+
+        String onDisk = Files.readString(file);
+        assertTrue(onDisk.contains("InterfaceExtractTarget(CharSequence name)"),
+            "constructor gains the new param type:\n" + onDisk);
+        assertFalse(onDisk.contains("void InterfaceExtractTarget"),
+            "MUST NOT prepend a return type to a constructor (the bug)");
+        assertTrue(onDisk.contains("new InterfaceExtractTarget(name)"),
+            "the `new` call site stays valid (ClassInstanceCreation handled, not skipped):\n" + onDisk);
+
+        String undoChangeId = (String) getData(response).get("undoChangeId");
+        ToolResponse undone = undoTool.execute(
+            objectMapper.createObjectNode().put("undoChangeId", undoChangeId));
+        assertTrue(undone.isSuccess(), () -> String.valueOf(undone.getError()));
+        assertEquals(original, Files.readString(file), "undo restores byte-for-byte");
+    }
+
+    @Test
+    @DisplayName("#15: adding a constructor param rewrites the `new` call site (old code skipped ClassInstanceCreation)")
+    void constructorAddParam_rewritesNewCallSite() throws Exception {
+        Path file = ctorFile();
+        String original = Files.readString(file);
+
+        ObjectNode args = ctorArgs();
+        ArrayNode params = args.putArray("newParameters");
+        params.add(param("name", "String"));
+        params.add(param("count", "int"));
+
+        ToolResponse response = tool.execute(args);
+        assertTrue(response.isSuccess(), () -> String.valueOf(response.getError()));
+
+        String onDisk = Files.readString(file);
+        assertTrue(onDisk.contains("InterfaceExtractTarget(String name, int count)"),
+            "constructor gains the second param, still a constructor:\n" + onDisk);
+        assertFalse(onDisk.contains("void InterfaceExtractTarget"), "no return type on a constructor");
+        assertTrue(onDisk.contains("new InterfaceExtractTarget(name, /* TODO: count */)"),
+            "the `new` call site is rewritten with the added-arg placeholder:\n" + onDisk);
+
+        String undoChangeId = (String) getData(response).get("undoChangeId");
+        undoTool.execute(objectMapper.createObjectNode().put("undoChangeId", undoChangeId));
+        assertEquals(original, Files.readString(file), "undo restores byte-for-byte");
+    }
 }

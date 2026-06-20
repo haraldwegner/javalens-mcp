@@ -8,14 +8,18 @@ import org.eclipse.jdt.core.ISourceRange;
 import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.Signature;
 import org.eclipse.jdt.core.dom.AST;
+import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.ASTParser;
 import org.eclipse.jdt.core.dom.ASTVisitor;
+import org.eclipse.jdt.core.dom.ClassInstanceCreation;
 import org.eclipse.jdt.core.dom.CompilationUnit;
+import org.eclipse.jdt.core.dom.ConstructorInvocation;
 import org.eclipse.jdt.core.dom.Expression;
 import org.eclipse.jdt.core.dom.IMethodBinding;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
 import org.eclipse.jdt.core.dom.MethodInvocation;
 import org.eclipse.jdt.core.dom.SingleVariableDeclaration;
+import org.eclipse.jdt.core.dom.SuperConstructorInvocation;
 import org.eclipse.jdt.core.search.IJavaSearchConstants;
 import org.eclipse.jdt.core.search.SearchMatch;
 import org.eclipse.core.resources.IFile;
@@ -195,12 +199,21 @@ public class ChangeMethodSignatureTool extends AbstractApplyingRefactoringTool {
                 newName = oldName;
             }
 
+            // bugs.md #15: a constructor has no return type and is invoked via
+            // `new` / `this(...)` / `super(...)`, not as a method call. Never
+            // emit a return type for it (the old code prepended `void`,
+            // producing an illegal `void ClassName(...)`), and resolve its call
+            // sites as constructor invocations (see updateCallSite).
+            boolean isConstructor = method.isConstructor();
+
             // Get current parameters
             String[] oldParamTypes = method.getParameterTypes();
             String[] oldParamNames = method.getParameterNames();
-            String oldReturnType = Signature.toString(method.getReturnType());
+            String oldReturnType = isConstructor ? null : Signature.toString(method.getReturnType());
 
-            if (newReturnType == null) {
+            if (isConstructor) {
+                newReturnType = null;
+            } else if (newReturnType == null) {
                 newReturnType = oldReturnType;
             }
 
@@ -258,7 +271,7 @@ public class ChangeMethodSignatureTool extends AbstractApplyingRefactoringTool {
             for (SearchMatch match : references) {
                 try {
                     updateCallSite(match, oldName, newName, newParameters,
-                        paramMapping, editsByFile);
+                        paramMapping, isConstructor, editsByFile);
                 } catch (Exception e) {
                     log.debug("Error updating call site: {}", e.getMessage());
                 }
@@ -341,7 +354,12 @@ public class ChangeMethodSignatureTool extends AbstractApplyingRefactoringTool {
 
     private String buildMethodSignature(String name, String returnType, List<ParameterInfo> params) {
         StringBuilder sig = new StringBuilder();
-        sig.append(returnType).append(" ").append(name).append("(");
+        // bugs.md #15: constructors pass returnType == null — omit it so we
+        // emit `ClassName(...)`, not `void ClassName(...)`.
+        if (returnType != null && !returnType.isBlank()) {
+            sig.append(returnType).append(" ");
+        }
+        sig.append(name).append("(");
 
         for (int i = 0; i < params.size(); i++) {
             if (i > 0) sig.append(", ");
@@ -385,9 +403,11 @@ public class ChangeMethodSignatureTool extends AbstractApplyingRefactoringTool {
         return "";
     }
 
+    @SuppressWarnings("unchecked")
     private void updateCallSite(SearchMatch match, String oldName, String newName,
                                 List<ParameterInfo> newParams,
                                 int[] paramMapping,
+                                boolean isConstructor,
                                 Map<IFile, List<TextEdit>> editsByFile)
             throws JavaModelException {
 
@@ -407,74 +427,114 @@ public class ChangeMethodSignatureTool extends AbstractApplyingRefactoringTool {
         parser.setResolveBindings(true);
         CompilationUnit ast = (CompilationUnit) parser.createAST(null);
 
-        // Find the MethodInvocation at this offset
-        final MethodInvocation[] invocation = {null};
+        // bugs.md #15: a method call is a MethodInvocation; a constructor call
+        // is a ClassInstanceCreation (`new X(...)`) or this(...)/super(...). The
+        // old code only matched MethodInvocation, so constructor call sites were
+        // never updated. Match the right node kind for the symbol being changed.
         final int matchOffset = match.getOffset();
-
+        final ASTNode[] found = {null};
         ast.accept(new ASTVisitor() {
+            private boolean covers(ASTNode node) {
+                return node.getStartPosition() <= matchOffset
+                    && matchOffset < node.getStartPosition() + node.getLength();
+            }
             @Override
             public boolean visit(MethodInvocation node) {
-                if (node.getName().getStartPosition() == matchOffset ||
-                    (node.getStartPosition() <= matchOffset &&
-                     matchOffset < node.getStartPosition() + node.getLength())) {
-                    if (oldName.equals(node.getName().getIdentifier())) {
-                        invocation[0] = node;
-                        return false;
-                    }
+                if (isConstructor || found[0] != null) return true;
+                if ((node.getName().getStartPosition() == matchOffset || covers(node))
+                        && oldName.equals(node.getName().getIdentifier())) {
+                    found[0] = node;
+                    return false;
+                }
+                return true;
+            }
+            @Override
+            public boolean visit(ClassInstanceCreation node) {
+                if (isConstructor && found[0] == null && covers(node)) {
+                    found[0] = node;
+                    return false;
+                }
+                return true;
+            }
+            @Override
+            public boolean visit(ConstructorInvocation node) { // this(...)
+                if (isConstructor && found[0] == null && covers(node)) {
+                    found[0] = node;
+                    return false;
+                }
+                return true;
+            }
+            @Override
+            public boolean visit(SuperConstructorInvocation node) { // super(...)
+                if (isConstructor && found[0] == null && covers(node)) {
+                    found[0] = node;
+                    return false;
                 }
                 return true;
             }
         });
 
-        if (invocation[0] == null) {
+        if (found[0] == null) {
+            return;
+        }
+        ASTNode node = found[0];
+
+        // Pull the existing args + reconstruct the prefix up to '(' per node kind.
+        List<Expression> oldArgs;
+        String prefix;
+        if (node instanceof MethodInvocation mi) {
+            oldArgs = mi.arguments();
+            prefix = (mi.getExpression() != null ? mi.getExpression().toString() + "." : "")
+                + newName + "(";
+        } else if (node instanceof ClassInstanceCreation cic) {
+            oldArgs = cic.arguments();
+            prefix = (cic.getExpression() != null ? cic.getExpression().toString() + "." : "")
+                + "new " + cic.getType().toString() + "(";
+        } else if (node instanceof ConstructorInvocation ci) {
+            oldArgs = ci.arguments();
+            prefix = "this(";
+        } else if (node instanceof SuperConstructorInvocation sci) {
+            oldArgs = sci.arguments();
+            prefix = (sci.getExpression() != null ? sci.getExpression().toString() + "." : "")
+                + "super(";
+        } else {
             return;
         }
 
-        MethodInvocation mi = invocation[0];
+        String newCall = prefix + String.join(", ", buildNewArgs(oldArgs, newParams, paramMapping)) + ")";
 
-        // Build new arguments list
-        @SuppressWarnings("unchecked")
-        List<Expression> oldArgs = mi.arguments();
+        if (cu.getResource() instanceof IFile callFile) {
+            editsByFile.computeIfAbsent(callFile, k -> new ArrayList<>())
+                .add(new ReplaceEdit(node.getStartPosition(), node.getLength(), newCall));
+        }
+    }
+
+    /**
+     * Reorder/insert arguments to match the new parameter list: each new param
+     * takes its mapped old argument, else its default value, else a TODO
+     * placeholder (no value can be synthesized for a freshly-added parameter).
+     */
+    private List<String> buildNewArgs(List<Expression> oldArgs, List<ParameterInfo> newParams,
+                                      int[] paramMapping) {
         List<String> newArgs = new ArrayList<>();
-
-        // For each new parameter, find the old argument or use default
         for (int newIdx = 0; newIdx < newParams.size(); newIdx++) {
             ParameterInfo newParam = newParams.get(newIdx);
             int oldIdx = -1;
-
-            // Find which old param maps to this new param
             for (int i = 0; i < paramMapping.length; i++) {
                 if (paramMapping[i] == newIdx) {
                     oldIdx = i;
                     break;
                 }
             }
-
             if (oldIdx >= 0 && oldIdx < oldArgs.size()) {
-                // Use existing argument
                 newArgs.add(oldArgs.get(oldIdx).toString());
             } else if (newParam.defaultValue != null) {
-                // New parameter - use default value
                 newArgs.add(newParam.defaultValue);
             } else {
-                // No default - use placeholder
                 newArgs.add("/* TODO: " + newParam.name + " */");
             }
         }
-
-        // Build new call text
-        StringBuilder newCall = new StringBuilder();
-        if (mi.getExpression() != null) {
-            newCall.append(mi.getExpression().toString()).append(".");
-        }
-        newCall.append(newName).append("(");
-        newCall.append(String.join(", ", newArgs));
-        newCall.append(")");
-
-        if (cu.getResource() instanceof IFile callFile) {
-            editsByFile.computeIfAbsent(callFile, k -> new ArrayList<>())
-                .add(new ReplaceEdit(mi.getStartPosition(), mi.getLength(), newCall.toString()));
-        }
+        return newArgs;
     }
 
     private boolean isValidJavaIdentifier(String name) {

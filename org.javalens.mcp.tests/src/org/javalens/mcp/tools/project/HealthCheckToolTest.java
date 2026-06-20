@@ -44,6 +44,11 @@ class HealthCheckToolTest {
         assertEquals("Ready", data.get("status"));
         assertNotNull(data.get("message"));
         assertNotNull(data.get("version"));
+        // bugs.md #14: version comes from McpProtocolHandler.serverVersion()
+        // (bundle manifest), never the old hardcoded "2.0.0-SNAPSHOT". On the
+        // plain-classpath test runtime that resolves to "unknown".
+        assertNotEquals("2.0.0-SNAPSHOT", data.get("version"),
+            "health_check version must not be the hardcoded placeholder");
         assertNotNull(data.get("uptime"));
 
         // Project info

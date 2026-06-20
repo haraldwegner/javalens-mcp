@@ -9,7 +9,7 @@ For each entry include: ID, date observed, severity, reproducer, expected vs act
 
 ## #15 — `change_method_signature` mangles a constructor into an illegal method (adds a return type, skips the call site)
 
-- **Status:** OPEN (targeted: v1.10.0 — Sprint 15; sits with the #13 constructor-handling line).
+- **Status:** FIXED in v1.10.0 (Sprint 15 B0) — `ChangeMethodSignatureTool` now branches on `IMethod.isConstructor()`: never emits a return type for a constructor (`buildMethodSignature` omits a null/blank type), and rewrites constructor call sites by visiting `ClassInstanceCreation` / `this(...)` / `super(...)` (not only `MethodInvocation`). Regression tests added. GitHub issue #1 closes at the v1.10.0 release.
 - **Date observed:** 2026-06-16 (live agent session on the strategies workspace).
 - **Reporter:** Harald (live usage); reverted manually.
 - **Severity:** HIGH — produces non-compiling source and silently leaves a stale call site; a manual revert is the only recovery if `undo_refactoring` isn't used.
@@ -39,7 +39,7 @@ In `ChangeMethodSignatureTool`: detect `IMethod.isConstructor()` and (a) never e
 
 ## #14 — `health_check` reports a hardcoded `version: "2.0.0-SNAPSHOT"`
 
-- **Status:** OPEN (targeted: v1.10.0 — one-liner: reuse `McpProtocolHandler.serverVersion()`)
+- **Status:** FIXED in v1.10.0 (Sprint 15 B0) — `HealthCheckTool` now reports `McpProtocolHandler.serverVersion()` (the bundle-manifest source the handshake uses); `serverVersion()` made public for cross-package access. Test pins it off the placeholder. GitHub issue #3 closes at the v1.10.0 release.
 - **Date observed:** 2026-06-11, first live `health_check` against the freshly released v1.9.0 residents.
 - **Reporter:** Harald's session (live acceptance after Reload All).
 - **Severity:** LOW — cosmetic, but it misreports the running version to every client and agent.
