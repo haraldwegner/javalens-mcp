@@ -96,6 +96,66 @@ class AnalyzeNamingToolTest {
         assertEquals(conventions("infer", null), conventions("infer", null));
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> data(ToolResponse r) {
+        assertTrue(r.isSuccess(), () -> String.valueOf(r.getError()));
+        return (Map<String, Object>) r.getData();
+    }
+
+    @Test
+    @DisplayName("suggest: applies category casing to the caller's intent")
+    void suggestAppliesCasing() {
+        Map<String, Object> type = data(tool.execute(objectMapper.createObjectNode()
+            .put("kind", "suggest").put("category", "type").put("intent", "billing http api client")));
+        assertEquals(List.of("BillingHttpApiClient"), type.get("candidates"));
+
+        Map<String, Object> constant = data(tool.execute(objectMapper.createObjectNode()
+            .put("kind", "suggest").put("category", "constant").put("intent", "max retry count")));
+        assertEquals(List.of("MAX_RETRY_COUNT"), constant.get("candidates"));
+    }
+
+    @Test
+    @DisplayName("suggest: no intent → convention shape only, no invented stem")
+    void suggestNoIntentNoStem() {
+        Map<String, Object> d = data(tool.execute(objectMapper.createObjectNode()
+            .put("kind", "suggest").put("category", "type")));
+        assertEquals(Boolean.TRUE, d.get("needsIntent"));
+        assertFalse(d.containsKey("candidates"), "no stem may be invented without intent");
+        assertEquals("UpperCamelCase", d.get("convention"));
+    }
+
+    @Test
+    @DisplayName("suggest: missing category rejected")
+    void suggestMissingCategory() {
+        ToolResponse r = tool.execute(objectMapper.createObjectNode()
+            .put("kind", "suggest").put("intent", "something"));
+        assertFalse(r.isSuccess());
+        assertEquals("INVALID_PARAMETER", r.getError().getCode());
+    }
+
+    @Test
+    @DisplayName("check: flags a mis-cased constant and suggests the corrected form")
+    void checkFlagsAndSuggests() {
+        Map<String, Object> bad = data(tool.execute(objectMapper.createObjectNode()
+            .put("kind", "check").put("category", "constant").put("name", "maxSize")));
+        assertEquals(Boolean.FALSE, bad.get("conforms"));
+        assertEquals("MAX_SIZE", bad.get("suggestion"));
+
+        Map<String, Object> good = data(tool.execute(objectMapper.createObjectNode()
+            .put("kind", "check").put("category", "constant").put("name", "MAX_SIZE")));
+        assertEquals(Boolean.TRUE, good.get("conforms"));
+        assertFalse(good.containsKey("suggestion"));
+    }
+
+    @Test
+    @DisplayName("check: missing name rejected")
+    void checkMissingName() {
+        ToolResponse r = tool.execute(objectMapper.createObjectNode()
+            .put("kind", "check").put("category", "constant"));
+        assertFalse(r.isSuccess());
+        assertEquals("INVALID_PARAMETER", r.getError().getCode());
+    }
+
     @Test
     @DisplayName("unknown kind is rejected")
     void unknownKind() {

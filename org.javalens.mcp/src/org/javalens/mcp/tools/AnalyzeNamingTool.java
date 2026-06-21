@@ -46,8 +46,10 @@ public class AnalyzeNamingTool extends AbstractTool {
 
     private static final Logger log = LoggerFactory.getLogger(AnalyzeNamingTool.class);
 
-    // Grows: + suggest, check (C5).
-    static final Set<String> KINDS = Set.of("infer", "get");
+    static final Set<String> KINDS = Set.of("infer", "get", "suggest", "check");
+
+    private static final Set<String> CATEGORIES =
+        Set.of("type", "method", "field", "constant", "package", "test");
 
     /** Below this many samples in a category, do not assert a convention. */
     private static final int MIN_SAMPLE = 3;
@@ -86,13 +88,19 @@ public class AnalyzeNamingTool extends AbstractTool {
                    analyze_naming(kind="get", category="constant")
 
             KINDS:
-            - infer — infer per-category conventions (type/method/field/constant/package/test)
-                      as naming_convention facts with confidence + examples + exceptions.
-                      A category with too few samples yields no convention (unclear).
-            - get   — return inferred conventions, optionally filtered by `category`.
+            - infer   — infer per-category conventions (type/method/field/constant/package/test)
+                        as naming_convention facts with confidence + examples + exceptions.
+                        A category with too few samples yields no convention (unclear).
+            - get     — return inferred conventions, optionally filtered by `category`.
+            - suggest — apply the category's convention to a caller-supplied `intent`
+                        (the words/meaning) → candidate name(s). MODEL-FREE: it only re-cases
+                        your intent; with no `intent` it returns the convention SHAPE, never an
+                        invented stem. Requires `category`.
+            - check   — validate a proposed `name` against its category convention → conforms,
+                        violations, and a re-cased suggestion. Requires `name` + `category`.
 
-            Optional: category (type/method/field/constant/package/test) for get;
-            projectKey; maxResults. Requires load_project first.
+            Params: category (type/method/field/constant/package/test); intent (suggest);
+            name (check); projectKey; maxResults. Requires load_project first.
             """;
     }
 
@@ -108,9 +116,18 @@ public class AnalyzeNamingTool extends AbstractTool {
         properties.put("kind", kind);
         Map<String, Object> category = new LinkedHashMap<>();
         category.put("type", "string");
-        category.put("description", "For kind=get: filter to one category "
-            + "(type/method/field/constant/package/test).");
+        category.put("description", "Category (type/method/field/constant/package/test). "
+            + "Filters get; required for suggest/check.");
         properties.put("category", category);
+        Map<String, Object> intent = new LinkedHashMap<>();
+        intent.put("type", "string");
+        intent.put("description", "For kind=suggest: the words/meaning of the symbol, e.g. "
+            + "\"client for the billing HTTP API\" or \"max retry count\".");
+        properties.put("intent", intent);
+        Map<String, Object> name = new LinkedHashMap<>();
+        name.put("type", "string");
+        name.put("description", "For kind=check: the proposed name to validate.");
+        properties.put("name", name);
         schema.put("properties", properties);
         schema.put("required", List.of("kind"));
         return withProjectKey(schema);
@@ -127,6 +144,12 @@ public class AnalyzeNamingTool extends AbstractTool {
                 "Unknown kind '" + kind + "'. Allowed: " + KINDS);
         }
         try {
+            if ("suggest".equals(kind)) {
+                return suggest(service, arguments);
+            }
+            if ("check".equals(kind)) {
+                return check(service, arguments);
+            }
             List<Convention> conventions = inferConventions(service);
             if ("get".equals(kind)) {
                 String category = getStringParam(arguments, "category");
@@ -155,6 +178,172 @@ public class AnalyzeNamingTool extends AbstractTool {
             log.error("analyze_naming({}) failed: {}", kind, e.getMessage(), e);
             return ToolResponse.internalError(e);
         }
+    }
+
+    private ToolResponse suggest(IJdtService service, JsonNode arguments) throws Exception {
+        String category = getStringParam(arguments, "category");
+        if (category == null || !CATEGORIES.contains(category)) {
+            return ToolResponse.invalidParameter("category", "required; one of " + CATEGORIES);
+        }
+        String intent = getStringParam(arguments, "intent");
+        String suffix = "test".equals(category) ? inferTestSuffix(service) : null;
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("operation", "analyze_naming");
+        data.put("kind", "suggest");
+        data.put("category", category);
+        data.put("convention", styleLabelFor(category) + (suffix != null ? " + *" + suffix + " suffix" : ""));
+
+        if (intent == null || intent.isBlank()) {
+            // MODEL-FREE: no stem is invented — only the convention shape is returned.
+            data.put("needsIntent", true);
+            data.put("note", "Provide `intent` (the words/meaning of the symbol). This tool only "
+                + "applies the convention's casing; it does not invent a name.");
+            return ToolResponse.success(data, ResponseMeta.builder().build());
+        }
+
+        List<String> tokens = tokenize(intent);
+        String candidate = render(tokens, category) + (suffix != null ? suffix : "");
+        data.put("needsIntent", false);
+        data.put("candidates", List.of(candidate));
+        // Exemplars from the inferred convention for this category, when present.
+        for (Convention c : inferConventions(service)) {
+            if (c.category.equals(category) && c.fact.get("evidence") != null) {
+                data.put("exemplars", c.fact.get("evidence"));
+                break;
+            }
+        }
+        return ToolResponse.success(data, ResponseMeta.builder().build());
+    }
+
+    private ToolResponse check(IJdtService service, JsonNode arguments) throws Exception {
+        String name = getStringParam(arguments, "name");
+        if (name == null || name.isBlank()) {
+            return ToolResponse.invalidParameter("name", "the proposed name is required");
+        }
+        String category = getStringParam(arguments, "category");
+        if (category == null || !CATEGORIES.contains(category)) {
+            return ToolResponse.invalidParameter("category", "required; one of " + CATEGORIES);
+        }
+
+        List<String> violations = new ArrayList<>();
+        boolean conforms;
+        String suggestion = null;
+        if ("package".equals(category)) {
+            boolean ok = true;
+            for (String seg : name.split("\\.")) {
+                if (!seg.matches("[a-z][a-z0-9]*")) {
+                    ok = false;
+                    break;
+                }
+            }
+            conforms = ok;
+            if (!ok) {
+                violations.add("expected all-lowercase package segments");
+                suggestion = name.toLowerCase();
+            }
+        } else {
+            Style style = categoryStyle(category);
+            boolean caseOk = name.matches(style.regex);
+            String suffix = "test".equals(category) ? inferTestSuffix(service) : null;
+            boolean suffixOk = suffix == null || name.endsWith(suffix);
+            conforms = caseOk && suffixOk;
+            if (!caseOk) {
+                violations.add("expected " + style.label);
+            }
+            if (!suffixOk) {
+                violations.add("expected the *" + suffix + " suffix");
+            }
+            if (!conforms) {
+                suggestion = render(tokenize(name), category) + (suffix != null ? suffix : "");
+            }
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("operation", "analyze_naming");
+        data.put("kind", "check");
+        data.put("name", name);
+        data.put("category", category);
+        data.put("conforms", conforms);
+        data.put("convention", styleLabelFor(category));
+        if (!violations.isEmpty()) {
+            data.put("violations", violations);
+        }
+        if (suggestion != null && !suggestion.equals(name)) {
+            data.put("suggestion", suggestion);
+        }
+        return ToolResponse.success(data, ResponseMeta.builder().build());
+    }
+
+    private static Style categoryStyle(String category) {
+        return switch (category) {
+            case "type", "test" -> Style.UPPER_CAMEL;
+            case "method", "field" -> Style.LOWER_CAMEL;
+            case "constant" -> Style.UPPER_SNAKE;
+            default -> Style.LOWER_CAMEL; // package handled separately by callers
+        };
+    }
+
+    private static String styleLabelFor(String category) {
+        if ("package".equals(category)) {
+            return "all-lowercase";
+        }
+        return categoryStyle(category).label;
+    }
+
+    /** Split a name or free-text intent into lowercase word tokens. */
+    private static List<String> tokenize(String text) {
+        String spaced = text.replaceAll("([a-z0-9])([A-Z])", "$1 $2");
+        List<String> tokens = new ArrayList<>();
+        for (String part : spaced.split("[^A-Za-z0-9]+")) {
+            if (!part.isBlank()) {
+                tokens.add(part.toLowerCase());
+            }
+        }
+        return tokens;
+    }
+
+    private static String render(List<String> tokens, String category) {
+        if ("package".equals(category)) {
+            return String.join(".", tokens);
+        }
+        Style style = categoryStyle(category);
+        StringBuilder sb = new StringBuilder();
+        switch (style) {
+            case UPPER_SNAKE -> {
+                for (int i = 0; i < tokens.size(); i++) {
+                    if (i > 0) {
+                        sb.append('_');
+                    }
+                    sb.append(tokens.get(i).toUpperCase());
+                }
+            }
+            case UPPER_CAMEL -> tokens.forEach(t -> sb.append(capitalize(t)));
+            case LOWER_CAMEL -> {
+                for (int i = 0; i < tokens.size(); i++) {
+                    sb.append(i == 0 ? tokens.get(i) : capitalize(tokens.get(i)));
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String capitalize(String s) {
+        return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    private String inferTestSuffix(IJdtService service) throws Exception {
+        for (Convention c : inferConventions(service)) {
+            if ("test".equals(c.category)) {
+                String summary = String.valueOf(c.fact.get("summary"));
+                int star = summary.indexOf('*');
+                int suf = summary.indexOf(" suffix");
+                if (star >= 0 && suf > star) {
+                    return summary.substring(star + 1, suf);
+                }
+            }
+        }
+        return "Test";
     }
 
     /** Internal: a convention + its category (for get-filtering). */
