@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
 
-**81 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, auto-applying refactorings with one-call undo, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection + removal — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
+**83 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, auto-applying refactorings with one-call undo, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection + removal — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
 
 Battle-tested daily on multi-project codebases via the companion **[javalens-manager](https://github.com/haraldwegner/javalens-manager)** desktop control plane. Improvement loop is live: features, fixes, and ergonomics ship in response to refactoring sessions in production. See the [roadmap](docs/sprints/) for what's coming and the [release notes](docs/release-notes/) for what just shipped.
 
@@ -93,7 +93,7 @@ Two PDE bundles loaded into one workspace where bundle A's `Require-Bundle` list
 
 ### Tool-surface progression (v1.5.0 — v1.7.0)
 
-Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 75 in v1.8.0 → 79 in v1.9.0 → 81 in v1.10.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
+Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 75 in v1.8.0 → 79 in v1.9.0 → 81 in v1.10.0 → 83 in v1.11.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
 
 - **`find_pattern_usages(kind, query)`** — `kind ∈ { annotation, instantiation, type_argument, cast, instanceof }`.
 - **`find_quality_issue(kind, …)`** — `kind ∈ { naming, bugs, unused, large_classes, circular_deps, reflection, throws, catches }`.
@@ -216,7 +216,7 @@ Multi-client benefit: when 3 Claude windows + Cursor connect to the same URL, th
 }
 ```
 
-Both transports expose the same 81 tools through the same JSON-RPC handler — only the wire differs.
+Both transports expose the same 83 tools through the same JSON-RPC handler — only the wire differs.
 
 Drop a `workspace.json` into `/path/to/javalens-workspaces/` to load projects:
 
@@ -232,7 +232,7 @@ The watcher loads them on startup and reconciles edits live. For single-project 
 
 ---
 
-## Tools (81 in v1.10.0)
+## Tools (83 in v1.11.0)
 
 ### Workspace administration (5)
 
@@ -283,6 +283,15 @@ The contract is a durable PR gate: [`docs/refactoring-tool-contract.md`](docs/re
 | Tool | Description |
 |---|---|
 | **`find_modernization(kind)`** | Find-only: ranked candidates to adopt a newer Java idiom — `anon_to_lambda` / `switch_to_pattern` / `loop_to_stream` / `optional` / `class_to_record` / `sealed`, plus Lombok-removal `lombok_to_record` / `delombok`. Apply with the matching refactoring tool. |
+
+### Knowledge tools (2 parametric, v1.11.0)
+
+Read-only and **model-free** — they emit facts, evidence, and doclint-correct skeletons; prose and semantic naming are the calling agent's job ([generation boundary](docs/sprints/sprint-future-agent-runner.md)). Both emit the shared `symbol_fact` schema.
+
+| Tool | Description |
+|---|---|
+| **`analyze_javadocs(kind)`** | `ingest` existing Javadocs → symbol-anchored facts (structured tags HIGH, free-text LOW); `validate` doclint-style (broken refs + missing tags, no getter spam); `generate` a doclint-correct skeleton + evidence (`@param`/`@return`/`@throws` stubs + `prosePlaceholders`; trivial accessors → `skip`). |
+| **`analyze_naming(kind)`** | `infer`/`get` shallow-precise conventions per category (type/method/field/constant/package/test) with confidence + examples + exceptions; `suggest(category, intent)` re-cases your intent to the convention (no stem without intent); `check(name, category)` flags violations + a corrected suggestion. |
 
 ### Verification (4)
 

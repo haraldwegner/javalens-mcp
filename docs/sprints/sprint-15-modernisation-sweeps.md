@@ -1,6 +1,6 @@
 # Fork Sprint 15 — Modernisation sweeps
 
-> **✅ SHIPPED 2026-06-21 — javalens-mcp v1.10.0 (the FINAL javalens-branded release).**
+> **✅ SHIPPED 2026-06-21 — javalens-mcp v1.10.0 (modernisation sweeps).** (Note: this is no longer "the final javalens release" — per the 2026-06-21 decision, Sprints 15a (naming/Javadoc) and 15b (null-safety) now also land in the javalens line before the GOJA rebrand.)
 > Delivered, as committed/verified:
 > - **B0** bugs #14 (`health_check` real version) + #15 (`change_method_signature`
 >   constructor handling); fork issues #1/#3 close at this release.
@@ -30,7 +30,7 @@
 >
 > **Predecessor:** [`sprint-14b-refactoring-full-apply.md`](sprint-14b-refactoring-full-apply.md) → v1.9.0 (refactor-apply policy + upstream parity sync).
 >
-> **Successor:** [`sprint-16-goja-rebrand.md`](sprint-16-goja-rebrand.md) → **goja-mcp v1.0** (the brand cutover sprint + service consolidation for the Antigravity tool cap). **v1.10.0 is the FINAL javalens-mcp release**; goja-mcp v1.0 launches the new product identity under a fresh v1.x version line.
+> **Successor:** [`sprint-15a-naming-javadocs.md`](sprint-15a-naming-javadocs.md) + [`sprint-15b-null-safety.md`](sprint-15b-null-safety.md) (further javalens content sprints), then [`sprint-16-goja-rebrand.md`](sprint-16-goja-rebrand.md) → **goja-mcp v1.0** (the brand cutover + service consolidation for the Antigravity tool cap). The **final javalens-mcp content** lands in 15a/15b; goja-mcp v1.0 then launches the new product identity under a fresh v1.x line.
 >
 > **Fowler smell detection** (originally Sprint 15, the largest content sprint) moves to [`sprint-17-fowler-smell-detection.md`](sprint-17-fowler-smell-detection.md) → goja-mcp v1.1 (first content release under the GOJA brand).
 

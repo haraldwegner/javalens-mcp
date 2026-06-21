@@ -4,7 +4,7 @@
 >
 > **Target version: goja-mcp v1.0** (intentionally NOT v2.0 of javalens-mcp — the rebrand is a clean break, new product identity, new version line).
 >
-> **Predecessor:** [`sprint-15-modernisation-sweeps.md`](sprint-15-modernisation-sweeps.md) → javalens-mcp v1.10.0 (final javalens release).
+> **Predecessor:** [`sprint-15-modernisation-sweeps.md`](sprint-15-modernisation-sweeps.md) → javalens-mcp v1.10.0, then [`sprint-15a-naming-javadocs.md`](sprint-15a-naming-javadocs.md) + [`sprint-15b-null-safety.md`](sprint-15b-null-safety.md) (the final javalens content sprints, both before this rebrand).
 >
 > **Successor:** [`sprint-17-fowler-smell-detection.md`](sprint-17-fowler-smell-detection.md) → goja-mcp v1.1 (first content release under GOJA — the 18 Fowler smell-detection tools).
 
