@@ -11,9 +11,12 @@ import org.eclipse.jdt.core.IMethod;
 import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTParser;
 import org.eclipse.jdt.core.dom.ASTVisitor;
+import org.eclipse.jdt.core.dom.Annotation;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.FieldDeclaration;
+import org.eclipse.jdt.core.dom.ImportDeclaration;
 import org.eclipse.jdt.core.dom.MarkerAnnotation;
+import org.eclipse.jdt.core.dom.Name;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
 import org.eclipse.jdt.core.dom.SingleVariableDeclaration;
 import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
@@ -56,8 +59,7 @@ public class ApplyNullAnnotationsTool extends AbstractApplyingRefactoringTool {
 
     private static final Logger log = LoggerFactory.getLogger(ApplyNullAnnotationsTool.class);
 
-    // Grows: + migrate (C4).
-    static final Set<String> KINDS = Set.of("add");
+    static final Set<String> KINDS = Set.of("add", "migrate");
 
     public ApplyNullAnnotationsTool(Supplier<IJdtService> serviceSupplier,
                                     RefactoringChangeCache changeCache) {
@@ -79,14 +81,19 @@ public class ApplyNullAnnotationsTool extends AbstractApplyingRefactoringTool {
                                           nullness="nullable" [, parameter="x"])
 
             KINDS:
-            - add — insert @Nullable/@NonNull (+ import) on a method return, a parameter
-                    (pass `parameter`), or a field. `style` defaults to the project's detected
-                    family, else JSpecify. PUBLIC-API GUARD: a public/protected target is
-                    refused unless allowPublicApi:true (breaking downstream contract).
+            - add     — insert @Nullable/@NonNull (+ import) on a method return, a parameter
+                        (pass `parameter`), or a field. `style` defaults to the project's detected
+                        family, else JSpecify. PUBLIC-API GUARD: a public/protected target is
+                        refused unless allowPublicApi:true (breaking downstream contract).
+            - migrate — convert nullness annotations from one family to another (e.g.
+                        from="JETBRAINS" to="JSPECIFY"): swaps the @Nullable/@NonNull usages +
+                        imports. REFUSES ambiguous conversions (default-scoping annotations like
+                        @NonNullByDefault/@NullMarked, wildcard imports, fully-qualified usages)
+                        — returns a manual-review result rather than guessing.
 
-            Params: symbol (FQN, required), nullness ("nullable"|"nonnull", required),
-            parameter (param name, optional), style (family, optional), allowPublicApi (bool).
-            Requires load_project first.
+            Params (add): symbol (FQN, required), nullness (required), parameter, style,
+            allowPublicApi. Params (migrate): from (family, required), to (family, default
+            JSPECIFY), filePath (optional scope). Requires load_project first.
             """;
     }
 
@@ -107,8 +114,14 @@ public class ApplyNullAnnotationsTool extends AbstractApplyingRefactoringTool {
             "description", "Optional nullness family override (JSPECIFY/ECLIPSE/JETBRAINS/...). Default: detected, else JSpecify."));
         properties.put("allowPublicApi", Map.of("type", "boolean",
             "description", "Required true to annotate a public/protected (exported) target."));
+        properties.put("from", Map.of("type", "string",
+            "description", "For kind=migrate: source nullness family (JSPECIFY/ECLIPSE/JETBRAINS/JSR305/...)."));
+        properties.put("to", Map.of("type", "string",
+            "description", "For kind=migrate: target family (default JSPECIFY)."));
+        properties.put("filePath", Map.of("type", "string",
+            "description", "For kind=migrate: optional scope to one file; omit to migrate the project."));
         schema.put("properties", properties);
-        schema.put("required", List.of("kind", "symbol", "nullness"));
+        schema.put("required", List.of("kind"));
         return withAutoApply(withProjectKey(schema));
     }
 
@@ -118,7 +131,167 @@ public class ApplyNullAnnotationsTool extends AbstractApplyingRefactoringTool {
         if (kind == null || !KINDS.contains(kind)) {
             return Preparation.fail(ToolResponse.invalidParameter("kind", "one of " + KINDS));
         }
-        return prepareAdd(service, arguments);
+        return "migrate".equals(kind) ? prepareMigrate(service, arguments)
+            : prepareAdd(service, arguments);
+    }
+
+    private Preparation prepareMigrate(IJdtService service, JsonNode arguments) throws Exception {
+        String fromRaw = getStringParam(arguments, "from");
+        if (fromRaw == null || fromRaw.isBlank()) {
+            return Preparation.fail(ToolResponse.invalidParameter("from",
+                "required source family, e.g. \"JETBRAINS\" or \"JSR305\"."));
+        }
+        NullnessStyle from;
+        try {
+            from = NullnessStyle.valueOf(fromRaw.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return Preparation.fail(ToolResponse.invalidParameter("from", "unknown family '" + fromRaw + "'."));
+        }
+        String toRaw = getStringParam(arguments, "to");
+        NullnessStyle to = NullnessStyle.DEFAULT;
+        if (toRaw != null && !toRaw.isBlank()) {
+            try {
+                to = NullnessStyle.valueOf(toRaw.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                return Preparation.fail(ToolResponse.invalidParameter("to", "unknown family '" + toRaw + "'."));
+            }
+        }
+        if (from == to) {
+            return Preparation.fail(ToolResponse.invalidParameter("from/to", "from and to are the same family."));
+        }
+
+        final NullnessStyle fromStyle = from;
+        final NullnessStyle toStyle = to;
+
+        String filePath = getStringParam(arguments, "filePath");
+        List<java.nio.file.Path> targets = new ArrayList<>();
+        if (filePath != null && !filePath.isBlank()) {
+            java.nio.file.Path p = java.nio.file.Path.of(filePath);
+            if (service.getCompilationUnit(p) == null) {
+                return Preparation.fail(ToolResponse.fileNotFound(filePath));
+            }
+            targets.add(p);
+        } else {
+            targets.addAll(service.getAllJavaFiles());
+        }
+
+        Map<IFile, List<TextEdit>> editsByFile = new LinkedHashMap<>();
+        int filesChanged = 0;
+        for (java.nio.file.Path path : targets) {
+            ICompilationUnit cu = service.getCompilationUnit(path);
+            if (cu == null) {
+                continue;
+            }
+            ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+            parser.setSource(cu);
+            parser.setKind(ASTParser.K_COMPILATION_UNIT);
+            CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+
+            // Ambiguity gate: refuse anything beyond the simple Nullable/NonNull pair.
+            boolean usesFrom = false;
+            for (Object o : ast.imports()) {
+                ImportDeclaration imp = (ImportDeclaration) o;
+                String fqn = imp.getName().getFullyQualifiedName();
+                if (fqn.equals(from.pkg) || fqn.startsWith(from.pkg + ".")) {
+                    usesFrom = true;
+                    if (imp.isOnDemand()) {
+                        return Preparation.fail(ambiguous(from, "a wildcard import of " + from.pkg
+                            + ".* in " + service.getPathUtils().formatPath(path)));
+                    }
+                    String simple = fqn.substring(fqn.lastIndexOf('.') + 1);
+                    if (!simple.equals(from.nullable) && !simple.equals(from.nonnull)) {
+                        return Preparation.fail(ambiguous(from, "the non-pair annotation @" + simple
+                            + " in " + service.getPathUtils().formatPath(path)));
+                    }
+                }
+            }
+            if (!usesFrom) {
+                continue;
+            }
+
+            ImportRewrite ir = ImportRewrite.create(cu, true);
+            ASTRewrite rw = ASTRewrite.create(ast.getAST());
+            AST factory = ast.getAST();
+            boolean[] usedNullable = {false};
+            boolean[] usedNonnull = {false};
+            String[] refusal = {null};
+            ast.accept(new ASTVisitor() {
+                private boolean handle(Annotation node) {
+                    Name typeName = node.getTypeName();
+                    String full = typeName.getFullyQualifiedName();
+                    String simple = full.contains(".") ? full.substring(full.lastIndexOf('.') + 1) : full;
+                    boolean qualified = full.contains(".");
+                    if (qualified && (full.equals(fromStyle.pkg + "." + fromStyle.nullable)
+                            || full.equals(fromStyle.pkg + "." + fromStyle.nonnull))) {
+                        refusal[0] = "a fully-qualified usage @" + full;
+                        return false;
+                    }
+                    if (simple.equals(fromStyle.nullable)) {
+                        usedNullable[0] = true;
+                        if (!fromStyle.nullable.equals(toStyle.nullable)) {
+                            rw.replace(typeName, factory.newSimpleName(toStyle.nullable), null);
+                        }
+                    } else if (simple.equals(fromStyle.nonnull)) {
+                        usedNonnull[0] = true;
+                        if (!fromStyle.nonnull.equals(toStyle.nonnull)) {
+                            rw.replace(typeName, factory.newSimpleName(toStyle.nonnull), null);
+                        }
+                    }
+                    return true;
+                }
+
+                @Override
+                public boolean visit(MarkerAnnotation node) { return handle(node); }
+
+                @Override
+                public boolean visit(org.eclipse.jdt.core.dom.NormalAnnotation node) { return handle(node); }
+
+                @Override
+                public boolean visit(org.eclipse.jdt.core.dom.SingleMemberAnnotation node) { return handle(node); }
+            });
+            if (refusal[0] != null) {
+                return Preparation.fail(ambiguous(from, refusal[0]));
+            }
+
+            if (usedNullable[0]) {
+                ir.removeImport(from.nullableFqn());
+                ir.addImport(to.nullableFqn());
+            }
+            if (usedNonnull[0]) {
+                ir.removeImport(from.nonnullFqn());
+                ir.addImport(to.nonnullFqn());
+            }
+            List<TextEdit> edits = new ArrayList<>();
+            edits.add(ir.rewriteImports(null));
+            edits.add(rw.rewriteAST());
+            editsByFile.put((IFile) cu.getResource(), edits);
+            filesChanged++;
+        }
+
+        if (editsByFile.isEmpty()) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("operation", getName());
+            data.put("applied", false);
+            data.put("hasChanges", false);
+            data.put("reason", "no " + from.name() + " nullness usages in scope");
+            return Preparation.fail(ToolResponse.success(data, org.javalens.mcp.models.ResponseMeta.builder().build()));
+        }
+
+        Change change = ChangeEngine.fromFileEdits("migrate nullness " + from.name() + "→" + to.name(),
+            editsByFile);
+        Map<String, Object> extras = new LinkedHashMap<>();
+        extras.put("from", from.name());
+        extras.put("to", to.name());
+        extras.put("filesChanged", filesChanged);
+        return Preparation.of(change,
+            "migrate nullness annotations " + from.name() + "→" + to.name()
+                + " (" + filesChanged + " file(s))", extras);
+    }
+
+    private static ToolResponse ambiguous(NullnessStyle from, String detail) {
+        return ToolResponse.error("MIGRATION_AMBIGUOUS",
+            "Refusing to migrate " + from.name() + " automatically — " + detail + ".",
+            "Family semantics are not 1:1 here; convert this construct manually.");
     }
 
     private Preparation prepareAdd(IJdtService service, JsonNode arguments) throws Exception {

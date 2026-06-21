@@ -58,6 +58,7 @@ class ApplyNullAnnotationsToolTest {
         args.put("symbol", "com.example.AddNullTarget#find");
         args.put("nullness", "nullable");
         args.put("parameter", "key");
+        args.put("style", "JSPECIFY"); // pin: the fixture set now has mixed families
         ToolResponse r = tool.execute(args);
         assertTrue(r.isSuccess(), () -> String.valueOf(r.getError()));
         Map<String, Object> data = getData(r);
@@ -92,6 +93,51 @@ class ApplyNullAnnotationsToolTest {
         ToolResponse r2 = tool.execute(allowed);
         assertTrue(r2.isSuccess(), () -> String.valueOf(r2.getError()));
         assertTrue(Files.readString(targetFile).contains("@Nullable"));
+    }
+
+    @Test
+    @DisplayName("migrate JetBrains → JSpecify: swaps usages + imports, undo restores")
+    void migrateJetBrainsToJSpecify() throws Exception {
+        Path migrateFile = helper.getTempDirectory()
+            .resolve("simple-maven/src/main/java/com/example/MigrateTarget.java");
+        String original = Files.readString(migrateFile);
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("kind", "migrate");
+        args.put("from", "JETBRAINS");
+        args.put("to", "JSPECIFY");
+        args.put("filePath", migrateFile.toString());
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(), () -> String.valueOf(r.getError()));
+        assertEquals(Boolean.TRUE, getData(r).get("applied"));
+
+        String after = Files.readString(migrateFile);
+        assertTrue(after.contains("@Nullable"), after);
+        assertTrue(after.contains("@NonNull"), "@NotNull → @NonNull:\n" + after);
+        assertFalse(after.contains("@NotNull"), "old @NotNull gone:\n" + after);
+        assertTrue(after.contains("import org.jspecify.annotations.NonNull;"), after);
+        assertTrue(after.contains("import org.jspecify.annotations.Nullable;"), after);
+        assertFalse(after.contains("org.jetbrains"), "jetbrains imports gone:\n" + after);
+
+        ToolResponse undone = undoTool.execute(objectMapper.createObjectNode()
+            .put("undoChangeId", (String) getData(r).get("undoChangeId")));
+        assertTrue(undone.isSuccess(), () -> String.valueOf(undone.getError()));
+        assertEquals(original, Files.readString(migrateFile), "undo restores byte-for-byte");
+    }
+
+    @Test
+    @DisplayName("migrate refuses an ambiguous default-scoping annotation")
+    void migrateRefusesAmbiguous() {
+        Path ambiguous = helper.getTempDirectory()
+            .resolve("simple-maven/src/main/java/com/example/AmbiguousNull.java");
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("kind", "migrate");
+        args.put("from", "ECLIPSE");
+        args.put("to", "JSPECIFY");
+        args.put("filePath", ambiguous.toString());
+        ToolResponse r = tool.execute(args);
+        assertFalse(r.isSuccess(), "default-scoping annotation must be refused");
+        assertEquals("MIGRATION_AMBIGUOUS", r.getError().getCode());
     }
 
     @Test
