@@ -9,9 +9,13 @@ import org.eclipse.jdt.core.dom.AnonymousClassDeclaration;
 import org.eclipse.jdt.core.dom.ClassInstanceCreation;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.EnhancedForStatement;
+import org.eclipse.jdt.core.dom.FieldDeclaration;
 import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
+import org.eclipse.jdt.core.dom.Modifier;
 import org.eclipse.jdt.core.dom.SwitchStatement;
+import org.eclipse.jdt.core.dom.Type;
+import org.eclipse.jdt.core.dom.TypeDeclaration;
 import org.javalens.core.IJdtService;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
@@ -42,9 +46,9 @@ public class FindModernizationTool extends AbstractTool {
 
     private static final Logger log = LoggerFactory.getLogger(FindModernizationTool.class);
 
-    // Batch 1 (Stage B3). Batch 2 (B4) adds: optional, class_to_record, sealed.
     static final Set<String> KINDS = Set.of(
-        "anon_to_lambda", "switch_to_pattern", "loop_to_stream");
+        "anon_to_lambda", "switch_to_pattern", "loop_to_stream",   // batch 1 (B3)
+        "optional", "class_to_record", "sealed");                  // batch 2 (B4)
 
     public FindModernizationTool(Supplier<IJdtService> serviceSupplier) {
         super(serviceSupplier);
@@ -72,6 +76,14 @@ public class FindModernizationTool extends AbstractTool {
                                  switch expression / pattern-matching switch (Java 21).
             - loop_to_stream   — enhanced-for accumulation loops that could become a
                                  Stream map/filter/collect pipeline.
+            - optional         — methods that return a reference type and `return null`,
+                                 candidates for Optional<T> + map/orElse.
+            - class_to_record  — plain immutable data classes (final fields + accessors +
+                                 equals/hashCode/toString, no other behaviour) that fit a
+                                 Java 16 record. The language-native answer to getter/setter
+                                 boilerplate — prefer this over generating accessors.
+            - sealed           — abstract base classes whose subclass set may be closed,
+                                 candidates for a `sealed` + `permits` hierarchy (Java 17).
 
             Optional: projectKey to scope to one loaded project; maxResults (default 200).
             Requires load_project first.
@@ -204,6 +216,83 @@ public class FindModernizationTool extends AbstractTool {
                         "for (" + node.getParameter().toString() + " : "
                             + node.getExpression().toString() + ")",
                         "consider a Stream map/filter/collect pipeline");
+                    return true;
+                }
+            });
+            case "optional" -> ast.accept(new ASTVisitor() {
+                @Override
+                public boolean visit(MethodDeclaration node) {
+                    if (out.size() >= max) {
+                        return false;
+                    }
+                    Type rt = node.getReturnType2();
+                    if (rt == null || rt.isPrimitiveType()) {
+                        return true; // void / primitive → not an Optional candidate
+                    }
+                    String body = node.getBody() == null ? "" : node.getBody().toString();
+                    if (!body.contains("return null")) {
+                        return true;
+                    }
+                    add(out, rel, ast.getLineNumber(node.getStartPosition()),
+                        node.getName().getIdentifier() + "(...) returns " + rt + " incl. null",
+                        "consider Optional<" + rt + "> + map/orElse instead of returning null");
+                    return true;
+                }
+            });
+            case "class_to_record" -> ast.accept(new ASTVisitor() {
+                @Override
+                public boolean visit(TypeDeclaration node) {
+                    if (out.size() >= max) {
+                        return false;
+                    }
+                    if (node.isInterface() || Modifier.isAbstract(node.getModifiers())
+                            || node.getSuperclassType() != null) {
+                        return true; // records can't extend; skip abstract/interfaces
+                    }
+                    FieldDeclaration[] fields = node.getFields();
+                    if (fields.length == 0) {
+                        return true;
+                    }
+                    // Data-only: every method is a constructor, a no-arg accessor, or
+                    // equals/hashCode/toString. Any other method = real behaviour.
+                    boolean dataOnly = true;
+                    for (MethodDeclaration m : node.getMethods()) {
+                        if (m.isConstructor()) {
+                            continue;
+                        }
+                        String n = m.getName().getIdentifier();
+                        int p = m.parameters().size();
+                        boolean accessor = (n.startsWith("get") || n.startsWith("is")) && p == 0;
+                        boolean objectMethod = (n.equals("equals") && p == 1)
+                            || (n.equals("hashCode") && p == 0)
+                            || (n.equals("toString") && p == 0);
+                        if (!accessor && !objectMethod) {
+                            dataOnly = false;
+                            break;
+                        }
+                    }
+                    if (!dataOnly) {
+                        return true;
+                    }
+                    add(out, rel, ast.getLineNumber(node.getStartPosition()),
+                        "class " + node.getName().getIdentifier(),
+                        "consider a record (immutable accessors + equals/hashCode/toString for free)");
+                    return true;
+                }
+            });
+            case "sealed" -> ast.accept(new ASTVisitor() {
+                @Override
+                public boolean visit(TypeDeclaration node) {
+                    if (out.size() >= max) {
+                        return false;
+                    }
+                    // Focus on abstract classes (interfaces are far noisier).
+                    if (node.isInterface() || !Modifier.isAbstract(node.getModifiers())) {
+                        return true;
+                    }
+                    add(out, rel, ast.getLineNumber(node.getStartPosition()),
+                        "abstract class " + node.getName().getIdentifier(),
+                        "consider 'sealed' + 'permits' if the subclass set is closed (Java 17)");
                     return true;
                 }
             });

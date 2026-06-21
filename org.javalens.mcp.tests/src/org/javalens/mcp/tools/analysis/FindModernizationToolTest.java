@@ -75,6 +75,32 @@ class FindModernizationToolTest {
         assertTrue(hitsModernizationTargets(c), "ModernizationTargets.upper loop must be a candidate: " + c);
     }
 
+    private boolean hitsRecordSealedTargets(List<Map<String, Object>> candidates) {
+        return candidates.stream()
+            .anyMatch(c -> String.valueOf(c.get("filePath")).endsWith("RecordSealedTargets.java"));
+    }
+
+    @Test
+    @DisplayName("class_to_record finds the immutable data class")
+    void classToRecord() {
+        List<Map<String, Object>> c = run("class_to_record");
+        assertTrue(hitsRecordSealedTargets(c), "PointData must be a class_to_record candidate: " + c);
+    }
+
+    @Test
+    @DisplayName("optional finds the nullable reference return")
+    void optional() {
+        List<Map<String, Object>> c = run("optional");
+        assertTrue(hitsRecordSealedTargets(c), "NullableFinder.findOrNull must be an optional candidate: " + c);
+    }
+
+    @Test
+    @DisplayName("sealed finds the abstract base class")
+    void sealed() {
+        List<Map<String, Object>> c = run("sealed");
+        assertTrue(hitsRecordSealedTargets(c), "ShapeBase must be a sealed candidate: " + c);
+    }
+
     @Test
     @DisplayName("unknown kind is rejected")
     void unknownKind() {

@@ -79,6 +79,12 @@ public class GenerateGettersSettersTool extends AbstractTool {
             Multi-field; complements encapsulate_field (which is single-field
             and rewrites call sites).
 
+            For an IMMUTABLE data carrier, prefer a Java record over generated
+            boilerplate — find candidates with find_modernization(kind="class_to_record").
+            Records give accessors + equals/hashCode/toString with zero code. Use
+            this tool for mutable JavaBeans (setters / inheritance) where a record
+            doesn't fit.
+
             USAGE:
               generate_getters_setters(filePath="...", line=10, column=14,
                                        fields=["name", "id"])
