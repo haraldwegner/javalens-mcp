@@ -4,9 +4,21 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.eclipse.jdt.core.ICompilationUnit;
 import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTParser;
+import org.eclipse.jdt.core.dom.Annotation;
+import org.eclipse.jdt.core.dom.ASTVisitor;
 import org.eclipse.jdt.core.dom.CompilationUnit;
+import org.eclipse.jdt.core.dom.IMethodBinding;
 import org.eclipse.jdt.core.dom.ImportDeclaration;
+import org.eclipse.jdt.core.dom.MethodDeclaration;
+import org.eclipse.jdt.core.dom.MethodInvocation;
+import org.eclipse.jdt.core.dom.NullLiteral;
+import org.eclipse.jdt.core.dom.ReturnStatement;
+import org.eclipse.jdt.core.dom.SimpleName;
+import org.eclipse.jdt.core.dom.SingleVariableDeclaration;
+import org.eclipse.jdt.core.dom.TypeDeclaration;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.knowledge.Confidence;
+import org.javalens.mcp.knowledge.SymbolFact;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
 import org.javalens.mcp.tools.nullness.NullnessStyle;
@@ -35,8 +47,16 @@ public class AnalyzeNullnessTool extends AbstractTool {
 
     private static final Logger log = LoggerFactory.getLogger(AnalyzeNullnessTool.class);
 
-    // Grows per stage: + infer_contracts, check (C2).
-    static final Set<String> KINDS = Set.of("detect_style", "find_violations");
+    static final Set<String> KINDS = Set.of("detect_style", "find_violations", "infer_contracts", "check");
+
+    /**
+     * Type-level annotations that mark a type as framework-managed or generated —
+     * a RISKY signal where conservative inference emits NO contract (the type's
+     * members may be reflectively/externally populated). Source-only simple names.
+     */
+    private static final Set<String> RISKY_TYPE_ANNOTATIONS = Set.of(
+        "Generated", "Entity", "Embeddable", "Component", "Service", "Repository",
+        "Controller", "RestController", "Configuration", "Mapper");
 
     /**
      * Compiler options enabling null analysis, overlaid on the parser (no project
@@ -80,9 +100,16 @@ public class AnalyzeNullnessTool extends AbstractTool {
                                 dereferences, nullable→non-null flows, contract mismatches).
                                 Flow checks work with no annotations; contract checks activate
                                 when the project carries its nullness jar. Compiler-driven.
+            - infer_contracts — conservatively infer nullness contracts (param/return) from
+                                strong signals (Objects.requireNonNull → @NonNull; `return null`
+                                → @Nullable) as null_contract facts. Emits NO contract inside
+                                framework-managed/generated types (risky). A contract IS an API
+                                contract — false confidence is worse than none.
+            - check          — focused: detected style + violations + inferred contracts for a
+                                single `filePath` or `symbol` (FQN).
 
-            Optional: filePath to scope to one file; projectKey to scope to one loaded project;
-            maxResults. Requires load_project.
+            Optional: filePath to scope; symbol (FQN) for check; projectKey; maxResults.
+            Requires load_project.
             """;
     }
 
@@ -98,8 +125,12 @@ public class AnalyzeNullnessTool extends AbstractTool {
         properties.put("kind", kind);
         Map<String, Object> filePath = new LinkedHashMap<>();
         filePath.put("type", "string");
-        filePath.put("description", "Optional. Restrict find_violations to one file; omit to scan the project.");
+        filePath.put("description", "Optional. Restrict find_violations/infer_contracts to one file; omit to scan the project. For check: the file to focus.");
         properties.put("filePath", filePath);
+        Map<String, Object> symbol = new LinkedHashMap<>();
+        symbol.put("type", "string");
+        symbol.put("description", "For kind=check: focus on this FQN symbol (resolves to its file).");
+        properties.put("symbol", symbol);
         Map<String, Object> maxResults = new LinkedHashMap<>();
         maxResults.put("type", "integer");
         maxResults.put("description", "Cap on results (default 50 for detect_style evidence; 200 for violations).");
@@ -122,6 +153,8 @@ public class AnalyzeNullnessTool extends AbstractTool {
         return switch (kind) {
             case "detect_style" -> detectStyle(service, arguments);
             case "find_violations" -> findViolations(service, arguments);
+            case "infer_contracts" -> inferContracts(service, arguments);
+            case "check" -> check(service, arguments);
             default -> ToolResponse.invalidParameter("kind", "Unhandled kind '" + kind + "'");
         };
     }
@@ -153,46 +186,7 @@ public class AnalyzeNullnessTool extends AbstractTool {
                 if (cu == null) {
                     continue;
                 }
-                Map<String, String> opts = new java.util.HashMap<>(cu.getJavaProject().getOptions(true));
-                opts.putAll(NULL_FLOW_OPTIONS);
-                // Tell the compiler which annotations are nullness annotations.
-                opts.put("org.eclipse.jdt.core.compiler.annotation.nullable", family.nullableFqn());
-                opts.put("org.eclipse.jdt.core.compiler.annotation.nonnull", family.nonnullFqn());
-                if (family == NullnessStyle.ECLIPSE) {
-                    opts.put("org.eclipse.jdt.core.compiler.annotation.nonnullbydefault",
-                        "org.eclipse.jdt.annotation.NonNullByDefault");
-                }
-
-                ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
-                parser.setSource(cu);
-                parser.setKind(ASTParser.K_COMPILATION_UNIT);
-                parser.setResolveBindings(true);
-                parser.setBindingsRecovery(true);
-                parser.setCompilerOptions(opts);
-                CompilationUnit ast = (CompilationUnit) parser.createAST(null);
-                if (ast == null) {
-                    continue;
-                }
-                String rel = service.getPathUtils().formatPath(path);
-                for (org.eclipse.jdt.core.compiler.IProblem problem : ast.getProblems()) {
-                    if (findings.size() >= maxResults) {
-                        break;
-                    }
-                    String msg = problem.getMessage();
-                    // Null problems have no dedicated IProblem category; their messages
-                    // reliably mention "null" (null pointer access, null type mismatch,
-                    // mismatching null constraints, …). Match on that — robust + compile-safe.
-                    if (msg == null || !msg.toLowerCase().contains("null")) {
-                        continue;
-                    }
-                    Map<String, Object> finding = new LinkedHashMap<>();
-                    finding.put("filePath", rel);
-                    finding.put("line", problem.getSourceLineNumber() - 1);
-                    finding.put("severity", problem.isError() ? "error" : "warning");
-                    finding.put("message", msg);
-                    finding.put("problemId", problem.getID());
-                    findings.add(finding);
-                }
+                collectFileViolations(service, cu, family, findings, maxResults);
             }
 
             Map<String, Object> data = new LinkedHashMap<>();
@@ -211,6 +205,266 @@ public class AnalyzeNullnessTool extends AbstractTool {
             log.error("analyze_nullness(find_violations) failed: {}", e.getMessage(), e);
             return ToolResponse.internalError(e);
         }
+    }
+
+    /** Per-file null-violation collection (shared by find_violations + check). */
+    private void collectFileViolations(IJdtService service, ICompilationUnit cu,
+                                       NullnessStyle family, List<Map<String, Object>> out, int max)
+            throws Exception {
+        Map<String, String> opts = new java.util.HashMap<>(cu.getJavaProject().getOptions(true));
+        opts.putAll(NULL_FLOW_OPTIONS);
+        opts.put("org.eclipse.jdt.core.compiler.annotation.nullable", family.nullableFqn());
+        opts.put("org.eclipse.jdt.core.compiler.annotation.nonnull", family.nonnullFqn());
+        if (family == NullnessStyle.ECLIPSE) {
+            opts.put("org.eclipse.jdt.core.compiler.annotation.nonnullbydefault",
+                "org.eclipse.jdt.annotation.NonNullByDefault");
+        }
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+        parser.setSource(cu);
+        parser.setKind(ASTParser.K_COMPILATION_UNIT);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        parser.setCompilerOptions(opts);
+        CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+        if (ast == null) {
+            return;
+        }
+        String rel = service.getPathUtils().formatPath(pathOf(cu, service));
+        for (org.eclipse.jdt.core.compiler.IProblem problem : ast.getProblems()) {
+            if (out.size() >= max) {
+                break;
+            }
+            String msg = problem.getMessage();
+            // Null problems have no dedicated IProblem category; their messages reliably
+            // mention "null". Match on that — robust + compile-safe.
+            if (msg == null || !msg.toLowerCase().contains("null")) {
+                continue;
+            }
+            Map<String, Object> finding = new LinkedHashMap<>();
+            finding.put("filePath", rel);
+            finding.put("line", problem.getSourceLineNumber() - 1);
+            finding.put("severity", problem.isError() ? "error" : "warning");
+            finding.put("message", msg);
+            finding.put("problemId", problem.getID());
+            out.add(finding);
+        }
+    }
+
+    private ToolResponse inferContracts(IJdtService service, JsonNode arguments) {
+        int maxResults = getIntParam(arguments, "maxResults", 200);
+        String filePath = getStringParam(arguments, "filePath");
+        try {
+            List<Path> targets = new ArrayList<>();
+            if (filePath != null && !filePath.isBlank()) {
+                Path p = Path.of(filePath);
+                if (service.getCompilationUnit(p) == null) {
+                    return ToolResponse.fileNotFound(filePath);
+                }
+                targets.add(p);
+            } else {
+                targets.addAll(service.getAllJavaFiles());
+            }
+            List<Map<String, Object>> contracts = new ArrayList<>();
+            for (Path path : targets) {
+                if (contracts.size() >= maxResults) {
+                    break;
+                }
+                ICompilationUnit cu = service.getCompilationUnit(path);
+                if (cu != null) {
+                    inferContractsForFile(service, cu, contracts, maxResults);
+                }
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("operation", "analyze_nullness");
+            data.put("kind", "infer_contracts");
+            data.put("contractCount", contracts.size());
+            data.put("contracts", contracts);
+            return ToolResponse.success(data, ResponseMeta.builder()
+                .totalCount(contracts.size())
+                .returnedCount(contracts.size())
+                .suggestedNextTools(List.of(
+                    "apply_null_annotations(kind=add) to record a confirmed contract"))
+                .build());
+        } catch (Exception e) {
+            log.error("analyze_nullness(infer_contracts) failed: {}", e.getMessage(), e);
+            return ToolResponse.internalError(e);
+        }
+    }
+
+    private void inferContractsForFile(IJdtService service, ICompilationUnit cu,
+                                       List<Map<String, Object>> out, int max) throws Exception {
+        ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+        parser.setSource(cu);
+        parser.setKind(ASTParser.K_COMPILATION_UNIT);
+        parser.setResolveBindings(true);
+        parser.setBindingsRecovery(true);
+        CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+        String rel = service.getPathUtils().formatPath(pathOf(cu, service));
+        ast.accept(new ASTVisitor() {
+            @Override
+            public boolean visit(TypeDeclaration node) {
+                if (isRiskyType(node)) {
+                    return false; // framework-managed/generated → emit no contract (risky)
+                }
+                for (MethodDeclaration m : node.getMethods()) {
+                    if (out.size() >= max) {
+                        return false;
+                    }
+                    inferMethod(m, rel, out);
+                }
+                return true; // descend into nested types
+            }
+        });
+    }
+
+    private void inferMethod(MethodDeclaration m, String rel, List<Map<String, Object>> out) {
+        String fqn = fqnOfMethod(m);
+        // @NonNull params: validated by Objects.requireNonNull(param).
+        for (Object o : m.parameters()) {
+            SingleVariableDeclaration p = (SingleVariableDeclaration) o;
+            String name = p.getName().getIdentifier();
+            if (bodyRequiresNonNull(m, name)) {
+                addContract(out, fqn, "param:" + name, "nonnull", Confidence.HIGH, rel,
+                    "Objects.requireNonNull(" + name + ")");
+            }
+        }
+        // @Nullable return: an explicit `return null`.
+        if (m.getReturnType2() != null && !m.isConstructor() && bodyReturnsNull(m)) {
+            addContract(out, fqn, "return", "nullable", Confidence.HIGH, rel, "return null");
+        }
+    }
+
+    private ToolResponse check(IJdtService service, JsonNode arguments) {
+        String filePath = getStringParam(arguments, "filePath");
+        String symbol = getStringParam(arguments, "symbol");
+        try {
+            ICompilationUnit cu = null;
+            if (filePath != null && !filePath.isBlank()) {
+                cu = service.getCompilationUnit(Path.of(filePath));
+                if (cu == null) {
+                    return ToolResponse.fileNotFound(filePath);
+                }
+            } else if (symbol != null && !symbol.isBlank()) {
+                java.util.Optional<org.eclipse.jdt.core.IJavaElement> el =
+                    org.javalens.mcp.tools.fqn.FqnResolver.resolveWorkspace(symbol, service);
+                if (el.isEmpty()) {
+                    return ToolResponse.symbolNotFound(symbol);
+                }
+                org.eclipse.jdt.core.IJavaElement anc =
+                    el.get().getAncestor(org.eclipse.jdt.core.IJavaElement.COMPILATION_UNIT);
+                if (!(anc instanceof ICompilationUnit found)) {
+                    return ToolResponse.invalidParameter("symbol", "symbol has no source file");
+                }
+                cu = found;
+            } else {
+                return ToolResponse.invalidParameter("filePath/symbol",
+                    "check requires a filePath or a symbol (FQN)");
+            }
+
+            NullnessStyle family = dominantStyle(service);
+            List<Map<String, Object>> violations = new ArrayList<>();
+            collectFileViolations(service, cu, family, violations, 200);
+            List<Map<String, Object>> contracts = new ArrayList<>();
+            inferContractsForFile(service, cu, contracts, 200);
+
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("operation", "analyze_nullness");
+            data.put("kind", "check");
+            data.put("target", symbol != null && !symbol.isBlank() ? symbol
+                : service.getPathUtils().formatPath(pathOf(cu, service)));
+            data.put("detectedStyle", family.name());
+            data.put("violations", violations);
+            data.put("contracts", contracts);
+            return ToolResponse.success(data, ResponseMeta.builder().build());
+        } catch (Exception e) {
+            log.error("analyze_nullness(check) failed: {}", e.getMessage(), e);
+            return ToolResponse.internalError(e);
+        }
+    }
+
+    private static boolean isRiskyType(TypeDeclaration node) {
+        for (Object o : node.modifiers()) {
+            if (o instanceof Annotation ann) {
+                String fqn = ann.getTypeName().getFullyQualifiedName();
+                String simple = fqn.contains(".") ? fqn.substring(fqn.lastIndexOf('.') + 1) : fqn;
+                if (RISKY_TYPE_ANNOTATIONS.contains(simple)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean bodyRequiresNonNull(MethodDeclaration m, String paramName) {
+        if (m.getBody() == null) {
+            return false;
+        }
+        boolean[] found = {false};
+        m.getBody().accept(new ASTVisitor() {
+            @Override
+            public boolean visit(MethodInvocation node) {
+                if ("requireNonNull".equals(node.getName().getIdentifier())
+                        && !node.arguments().isEmpty()
+                        && node.arguments().get(0) instanceof SimpleName sn
+                        && sn.getIdentifier().equals(paramName)) {
+                    found[0] = true;
+                }
+                return true;
+            }
+        });
+        return found[0];
+    }
+
+    private static boolean bodyReturnsNull(MethodDeclaration m) {
+        if (m.getBody() == null) {
+            return false;
+        }
+        boolean[] found = {false};
+        m.getBody().accept(new ASTVisitor() {
+            @Override
+            public boolean visit(ReturnStatement node) {
+                if (node.getExpression() instanceof NullLiteral) {
+                    found[0] = true;
+                }
+                return true;
+            }
+        });
+        return found[0];
+    }
+
+    private static String fqnOfMethod(MethodDeclaration m) {
+        IMethodBinding b = m.resolveBinding();
+        if (b != null && b.getDeclaringClass() != null) {
+            return b.getDeclaringClass().getQualifiedName() + "#" + b.getName();
+        }
+        return m.getName().getIdentifier();
+    }
+
+    private static void addContract(List<Map<String, Object>> out, String fqn, String target,
+                                    String nullness, Confidence conf, String rel, String evidence) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("nullness", nullness);
+        m.put("target", target);
+        m.putAll(SymbolFact
+            .of("null_contract", target + " is @" + (nullness.equals("nonnull") ? "NonNull" : "Nullable")
+                + " on " + fqn, conf)
+            .symbol(fqn)
+            .source("inference", rel)
+            .evidence(List.<Object>of(evidence))
+            .build()
+            .toMap());
+        out.add(m);
+    }
+
+    private static Path pathOf(ICompilationUnit cu, IJdtService service) {
+        try {
+            if (cu.getResource() != null && cu.getResource().getLocation() != null) {
+                return Path.of(cu.getResource().getLocation().toOSString());
+            }
+        } catch (RuntimeException ignore) {
+            // fall through
+        }
+        return Path.of(cu.getElementName());
     }
 
     /** Dominant nullness family across the project, or the Eclipse default for option FQNs. */

@@ -76,6 +76,60 @@ class AnalyzeNullnessToolTest {
             "the deref fixture should be flagged: " + v);
     }
 
+    @SuppressWarnings("unchecked")
+    private java.util.List<Map<String, Object>> inferContracts() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("kind", "infer_contracts");
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(), () -> String.valueOf(r.getError()));
+        return (java.util.List<Map<String, Object>>) ((Map<String, Object>) r.getData()).get("contracts");
+    }
+
+    private Map<String, Object> contract(java.util.List<Map<String, Object>> cs, String symEnds, String target) {
+        return cs.stream()
+            .filter(c -> String.valueOf(c.get("symbol")).endsWith(symEnds) && target.equals(c.get("target")))
+            .findFirst().orElse(null);
+    }
+
+    @Test
+    @DisplayName("infer_contracts: requireNonNull param → @NonNull, return null → @Nullable")
+    void infersContracts() {
+        java.util.List<Map<String, Object>> cs = inferContracts();
+        Map<String, Object> param = contract(cs, "NullnessContracts#requireParam", "param:key");
+        assertNotNull(param, "requireNonNull param contract expected: " + cs);
+        assertEquals("nonnull", param.get("nullness"));
+        assertEquals("high", param.get("confidence"));
+
+        Map<String, Object> ret = contract(cs, "NullnessContracts#maybeNull", "return");
+        assertNotNull(ret, "return-null contract expected: " + cs);
+        assertEquals("nullable", ret.get("nullness"));
+    }
+
+    @Test
+    @DisplayName("infer_contracts: no contract inside a @Generated (risky) type")
+    void skipsRiskyType() {
+        boolean generatedPresent = inferContracts().stream()
+            .anyMatch(c -> String.valueOf(c.get("symbol")).endsWith("GeneratedHolder#alsoNull"));
+        assertFalse(generatedPresent, "framework/generated type must be skipped");
+    }
+
+    @Test
+    @DisplayName("check: focused style + violations + contracts for a symbol's file")
+    void checkFocus() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("kind", "check");
+        args.put("symbol", "com.example.NullnessContracts#maybeNull");
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(), () -> String.valueOf(r.getError()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) r.getData();
+        assertNotNull(data.get("detectedStyle"));
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> contracts = (java.util.List<Map<String, Object>>) data.get("contracts");
+        assertNotNull(contract(contracts, "NullnessContracts#maybeNull", "return"),
+            "check should surface the file's contracts: " + contracts);
+    }
+
     @Test
     @DisplayName("unknown kind is rejected")
     void unknownKind() {
