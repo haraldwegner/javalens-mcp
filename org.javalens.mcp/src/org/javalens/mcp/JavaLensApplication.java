@@ -55,6 +55,7 @@ import org.javalens.mcp.tools.CompileWorkspaceTool;
 import org.javalens.mcp.tools.RefreshWorkspaceTool;
 import org.javalens.mcp.tools.FindDuplicateCodeTool;
 import org.javalens.mcp.tools.AnalyzeJavadocsTool;
+import org.javalens.mcp.tools.AnalyzeNamingTool;
 import org.javalens.mcp.tools.ApplyCleanupTool;
 import org.javalens.mcp.tools.FindModernizationTool;
 import org.javalens.mcp.tools.RunTestsTool;
@@ -436,6 +437,7 @@ public class JavaLensApplication implements IApplication {
 
         // Sprint 15a (v1.11.0): naming + Javadoc knowledge tools.
         toolRegistry.register(new AnalyzeJavadocsTool(() -> jdtService));
+        toolRegistry.register(new AnalyzeNamingTool(() -> jdtService));
 
         // Sprint 13 (v1.7.0): Ring 2 code generation tools.
         toolRegistry.register(new GenerateConstructorTool(() -> jdtService, refactoringChangeCache));
