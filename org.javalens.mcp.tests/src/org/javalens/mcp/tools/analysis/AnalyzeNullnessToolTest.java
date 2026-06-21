@@ -54,6 +54,28 @@ class AnalyzeNullnessToolTest {
         assertFalse(((java.util.List<?>) d.get("evidence")).isEmpty(), "evidence files expected");
     }
 
+    @SuppressWarnings("unchecked")
+    private java.util.List<Map<String, Object>> findViolations() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("kind", "find_violations");
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(), () -> String.valueOf(r.getError()));
+        Map<String, Object> data = (Map<String, Object>) r.getData();
+        assertEquals("find_violations", data.get("kind"));
+        return (java.util.List<Map<String, Object>>) data.get("violations");
+    }
+
+    @Test
+    @DisplayName("find_violations reports flow null dereferences from the fixture")
+    void findsNullDeref() {
+        java.util.List<Map<String, Object>> v = findViolations();
+        assertFalse(v.isEmpty(), "expected null-pointer findings");
+        assertTrue(v.stream().allMatch(f -> String.valueOf(f.get("message")).toLowerCase().contains("null")),
+            "every finding mentions null: " + v);
+        assertTrue(v.stream().anyMatch(f -> String.valueOf(f.get("filePath")).endsWith("NullnessViolations.java")),
+            "the deref fixture should be flagged: " + v);
+    }
+
     @Test
     @DisplayName("unknown kind is rejected")
     void unknownKind() {
