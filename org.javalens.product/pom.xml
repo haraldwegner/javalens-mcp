@@ -17,6 +17,18 @@
     <name>JavaLens :: Product</name>
     <description>Standalone JavaLens distribution</description>
 
+    <properties>
+        <!--
+          Sprint 15 B5c: the Lombok comprehension agent. Pinned to match the
+          product's bundled JDT (org.eclipse.jdt.core 3.39, Eclipse 2024-09) —
+          Lombok's agent patches ECJ by shape, so its version is locked to the
+          product's JDT, NOT the analyzed project's compile version. Shipped as
+          a sibling of javalens.jar; the manager points -javaagent at it only
+          for Lombok-using workspaces. MIT-licensed — redistribution permitted.
+        -->
+        <lombok.version>1.18.36</lombok.version>
+    </properties>
+
     <build>
         <pluginManagement>
             <plugins>
@@ -188,6 +200,109 @@
                                     <version>${project.version}</version>
                                     <type>jar</type>
                                     <destFileName>javalens.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                            <outputDirectory>${project.build.directory}/products/org.javalens.product/macosx/cocoa/aarch64/JavaLens.app/Contents/Eclipse</outputDirectory>
+                        </configuration>
+                    </execution>
+
+                    <!--
+                      Sprint 15 B5c: ship lombok.jar as a sibling of javalens.jar
+                      in every platform product dir. The manager prepends
+                      -javaagent:<this> to the resident JVM only for Lombok-using
+                      workspaces (Lombok comprehension). Mirrors the launcher
+                      copies above, destFileName lombok.jar.
+                    -->
+                    <execution>
+                        <id>copy-lombok-win32</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.projectlombok</groupId>
+                                    <artifactId>lombok</artifactId>
+                                    <version>${lombok.version}</version>
+                                    <type>jar</type>
+                                    <destFileName>lombok.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                            <outputDirectory>${project.build.directory}/products/org.javalens.product/win32/win32/x86_64/javalens</outputDirectory>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>copy-lombok-linux-x64</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.projectlombok</groupId>
+                                    <artifactId>lombok</artifactId>
+                                    <version>${lombok.version}</version>
+                                    <type>jar</type>
+                                    <destFileName>lombok.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                            <outputDirectory>${project.build.directory}/products/org.javalens.product/linux/gtk/x86_64/javalens</outputDirectory>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>copy-lombok-linux-arm64</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.projectlombok</groupId>
+                                    <artifactId>lombok</artifactId>
+                                    <version>${lombok.version}</version>
+                                    <type>jar</type>
+                                    <destFileName>lombok.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                            <outputDirectory>${project.build.directory}/products/org.javalens.product/linux/gtk/aarch64/javalens</outputDirectory>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>copy-lombok-macos-x64</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.projectlombok</groupId>
+                                    <artifactId>lombok</artifactId>
+                                    <version>${lombok.version}</version>
+                                    <type>jar</type>
+                                    <destFileName>lombok.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                            <outputDirectory>${project.build.directory}/products/org.javalens.product/macosx/cocoa/x86_64/JavaLens.app/Contents/Eclipse</outputDirectory>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>copy-lombok-macos-arm64</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.projectlombok</groupId>
+                                    <artifactId>lombok</artifactId>
+                                    <version>${lombok.version}</version>
+                                    <type>jar</type>
+                                    <destFileName>lombok.jar</destFileName>
                                 </artifactItem>
                             </artifactItems>
                             <outputDirectory>${project.build.directory}/products/org.javalens.product/macosx/cocoa/aarch64/JavaLens.app/Contents/Eclipse</outputDirectory>
