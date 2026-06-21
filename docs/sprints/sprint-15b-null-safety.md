@@ -1,5 +1,14 @@
 # Fork Sprint 15b — Java null-safety tools
 
+> **✅ SHIPPED — javalens-mcp v1.12.0.** Delivered as TWO tools (a single tool can't both
+> carry readOnlyHint and extend the mutating apply base): `analyze_nullness(detect_style|
+> find_violations|infer_contracts|check)` (read-only) + `apply_null_annotations(add|migrate)`
+> (apply/undo). find_violations reuses JDT compiler null analysis via parser options;
+> infer_contracts is conservative (skips framework/generated types); add defaults to JSpecify
+> with a public-API guard; migrate refuses ambiguous family conversions. Emits the shared
+> `SymbolFact` (`type:"null_contract"`). Tool count 83 → 85. This completes the javalens
+> content line; next is Sprint 16 GOJA rebrand → goja-mcp v1.0.
+>
 > **Status: drafted 2026-06-21; committed as a core javalens sprint.** This is the *deepest* item in the modernization program (the Sprint 15 theme): **null-safety is the single biggest reason teams leave Java for Kotlin**, so closing that gap is modernization, not a side "safety" feature. It stays entirely inside the JDT/JLS toolchain.
 >
 > **Placement:** after [`sprint-15a-naming-javadocs.md`](sprint-15a-naming-javadocs.md) and before [`sprint-16-goja-rebrand.md`](sprint-16-goja-rebrand.md).
