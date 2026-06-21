@@ -95,6 +95,43 @@ class AnalyzeJavadocsToolTest {
         assertFalse(undocumentedPresent, "undocumented method must not produce a fact");
     }
 
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> validate() {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("kind", "validate");
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(), () -> String.valueOf(r.getError()));
+        Map<String, Object> data = (Map<String, Object>) r.getData();
+        assertEquals("validate", data.get("kind"));
+        return (List<Map<String, Object>>) data.get("findings");
+    }
+
+    @Test
+    @DisplayName("validate reports missing tags + broken refs on documented members, no getter spam")
+    void validateReportsAndDoesNotSpam() {
+        List<Map<String, Object>> findings = validate();
+        assertFalse(findings.isEmpty(), "expected Javadoc findings");
+        assertTrue(findings.stream().allMatch(f -> "JAVADOC".equals(f.get("category"))),
+            "all findings are JAVADOC: " + findings);
+        String msgs = findings.toString();
+        assertTrue(msgs.contains("Missing tag for parameter"),
+            "missing-@param should be reported: " + msgs);
+        assertTrue(msgs.toLowerCase().contains("cannot be resolved") || msgs.contains("Nonexistent"),
+            "broken @see reference should be reported: " + msgs);
+        // The design choice: missing-comment detection is OFF → no undocumented-getter spam.
+        assertFalse(msgs.contains("Missing comment"),
+            "trivial undocumented members must NOT be flagged: " + msgs);
+    }
+
+    @Test
+    @DisplayName("validate has no global side effect (a later ingest is unaffected)")
+    void validateNoSideEffect() {
+        validate();
+        // Options are parser-scoped, never set on the project — ingest still works.
+        Map<String, Object> f = factFor(ingest(), "JavadocTargets#discountedTotal", "api_contract");
+        assertNotNull(f, "ingest still works after validate (no global option mutation)");
+    }
+
     @Test
     @DisplayName("unknown kind is rejected")
     void unknownKind() {

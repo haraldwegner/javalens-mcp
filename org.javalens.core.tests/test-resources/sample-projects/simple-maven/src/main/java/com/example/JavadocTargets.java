@@ -42,4 +42,27 @@ public class JavadocTargets {
     public int undocumented(int x) {
         return x + 1;
     }
+
+    // Trivial getter, no Javadoc — validate must NOT flag this (no missing-comment spam).
+    public String getName() {
+        return "JavadocTargets";
+    }
+
+    /**
+     * Increments by the given step.
+     *
+     * @return the incremented value
+     */
+    public int missingParam(int count) {
+        return count + 1;
+    }
+
+    /**
+     * Helper that delegates.
+     *
+     * @see Nonexistent#nope broken reference on purpose
+     */
+    public void brokenLink() {
+        // intentionally references an unresolvable type in @see
+    }
 }

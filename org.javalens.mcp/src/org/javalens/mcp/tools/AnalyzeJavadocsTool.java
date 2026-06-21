@@ -56,8 +56,24 @@ public class AnalyzeJavadocsTool extends AbstractTool {
 
     private static final Logger log = LoggerFactory.getLogger(AnalyzeJavadocsTool.class);
 
-    // Grows per stage: + validate (C2), + generate (C3).
-    static final Set<String> KINDS = Set.of("ingest");
+    // Grows per stage: + generate (C3).
+    static final Set<String> KINDS = Set.of("ingest", "validate");
+
+    /**
+     * Doc-comment compiler options overlaid on the parser for {@code validate}
+     * (passed via {@code ASTParser.setCompilerOptions} — NOT set on the project,
+     * so there is no global side effect to restore). Deliberately enables
+     * invalid/missing-TAG detection on documented members but NOT
+     * {@code missingJavadocComments} — that would flag every undocumented
+     * getter/setter (the "don't spam trivial getters" rule). "Missing entirely"
+     * detection is intentionally out of scope for v1.11.
+     */
+    private static final Map<String, String> DOC_OPTIONS = Map.of(
+        "org.eclipse.jdt.core.compiler.doc.comment.support", "enabled",
+        "org.eclipse.jdt.core.compiler.problem.invalidJavadoc", "warning",
+        "org.eclipse.jdt.core.compiler.problem.invalidJavadocTags", "enabled",
+        "org.eclipse.jdt.core.compiler.problem.missingJavadocTags", "warning",
+        "org.eclipse.jdt.core.compiler.problem.missingJavadocTagsVisibility", "public");
 
     public AnalyzeJavadocsTool(Supplier<IJdtService> serviceSupplier) {
         super(serviceSupplier);
@@ -77,10 +93,13 @@ public class AnalyzeJavadocsTool extends AbstractTool {
             USAGE: analyze_javadocs(kind="ingest")
 
             KINDS:
-            - ingest — parse existing Javadocs into symbol-anchored facts
-                       { type, symbol, summary, details, source, confidence, evidence }.
-                       Structured tags (@param/@return/@throws/@deprecated/@see) are
-                       HIGH confidence; free-text prose is surfaced at LOW confidence.
+            - ingest   — parse existing Javadocs into symbol-anchored facts
+                         { type, symbol, summary, details, source, confidence, evidence }.
+                         Structured tags (@param/@return/@throws/@deprecated/@see) are
+                         HIGH confidence; free-text prose is surfaced at LOW confidence.
+            - validate — doclint-style validation (via the compiler): reports broken/invalid
+                         Javadoc and missing tags on DOCUMENTED members. Does not flag
+                         undocumented getters/setters (no missing-comment spam).
 
             Optional: filePath to scope to one file; projectKey to scope to one loaded
             project; maxResults (default 200). Requires load_project first.
@@ -120,8 +139,96 @@ public class AnalyzeJavadocsTool extends AbstractTool {
             return ToolResponse.invalidParameter("kind",
                 "Unknown kind '" + kind + "'. Allowed: " + KINDS);
         }
-        // Only "ingest" is implemented this stage; validated above.
-        return ingest(service, arguments);
+        return switch (kind) {
+            case "ingest" -> ingest(service, arguments);
+            case "validate" -> validate(service, arguments);
+            default -> ToolResponse.invalidParameter("kind", "Unhandled kind '" + kind + "'");
+        };
+    }
+
+    private List<Path> resolveTargets(IJdtService service, JsonNode arguments) {
+        String filePath = getStringParam(arguments, "filePath");
+        List<Path> targets = new ArrayList<>();
+        if (filePath != null && !filePath.isBlank()) {
+            Path p = Path.of(filePath);
+            if (service.getCompilationUnit(p) != null) {
+                targets.add(p);
+            }
+            return targets; // empty → caller reports fileNotFound
+        }
+        targets.addAll(service.getAllJavaFiles());
+        return targets;
+    }
+
+    private ToolResponse validate(IJdtService service, JsonNode arguments) {
+        int maxResults = getIntParam(arguments, "maxResults", 200);
+        String filePath = getStringParam(arguments, "filePath");
+        List<Path> targets = resolveTargets(service, arguments);
+        if (targets.isEmpty() && filePath != null && !filePath.isBlank()) {
+            return ToolResponse.fileNotFound(filePath);
+        }
+
+        List<Map<String, Object>> findings = new ArrayList<>();
+        try {
+            for (Path path : targets) {
+                if (findings.size() >= maxResults) {
+                    break;
+                }
+                ICompilationUnit cu = service.getCompilationUnit(path);
+                if (cu == null) {
+                    continue;
+                }
+                // Doc-comment problem detection via parser options ONLY — no project
+                // mutation, so there is nothing to restore and no global side effect.
+                // (cu.reconcile(FORCE_PROBLEM_DETECTION) only works in working-copy mode.)
+                Map<String, String> opts = new java.util.HashMap<>(cu.getJavaProject().getOptions(true));
+                opts.putAll(DOC_OPTIONS);
+
+                ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
+                parser.setSource(cu);
+                parser.setKind(ASTParser.K_COMPILATION_UNIT);
+                parser.setResolveBindings(true);
+                parser.setBindingsRecovery(true);
+                parser.setCompilerOptions(opts);
+                CompilationUnit ast = (CompilationUnit) parser.createAST(null);
+                if (ast == null) {
+                    continue;
+                }
+                String rel = service.getPathUtils().formatPath(path);
+                for (org.eclipse.jdt.core.compiler.IProblem problem : ast.getProblems()) {
+                    if (findings.size() >= maxResults) {
+                        break;
+                    }
+                    if (!(problem instanceof org.eclipse.jdt.core.compiler.CategorizedProblem cp)
+                            || cp.getCategoryID() != org.eclipse.jdt.core.compiler.CategorizedProblem.CAT_JAVADOC) {
+                        continue;
+                    }
+                    Map<String, Object> finding = new LinkedHashMap<>();
+                    finding.put("filePath", rel);
+                    finding.put("line", problem.getSourceLineNumber() - 1);
+                    finding.put("severity", problem.isError() ? "error" : "warning");
+                    finding.put("message", problem.getMessage());
+                    finding.put("problemId", problem.getID());
+                    finding.put("category", "JAVADOC");
+                    findings.add(finding);
+                }
+            }
+        } catch (Exception e) {
+            log.error("analyze_javadocs(validate) failed: {}", e.getMessage(), e);
+            return ToolResponse.internalError(e);
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("operation", "analyze_javadocs");
+        data.put("kind", "validate");
+        data.put("findingCount", findings.size());
+        data.put("findings", findings);
+        return ToolResponse.success(data, ResponseMeta.builder()
+            .totalCount(findings.size())
+            .returnedCount(findings.size())
+            .suggestedNextTools(List.of(
+                "analyze_javadocs(kind=generate) for a doclint-correct skeleton to fix a gap"))
+            .build());
     }
 
     private ToolResponse ingest(IJdtService service, JsonNode arguments) {
