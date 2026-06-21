@@ -101,6 +101,36 @@ class FindModernizationToolTest {
         assertTrue(hitsRecordSealedTargets(c), "ShapeBase must be a sealed candidate: " + c);
     }
 
+    private boolean hitsLombokTargets(List<Map<String, Object>> candidates, String fileSuffix) {
+        return candidates.stream()
+            .anyMatch(c -> String.valueOf(c.get("filePath")).endsWith(fileSuffix));
+    }
+
+    @Test
+    @DisplayName("lombok_to_record finds the @Data data carrier")
+    void lombokToRecord() {
+        List<Map<String, Object>> c = run("lombok_to_record");
+        assertTrue(hitsLombokTargets(c, "LombokTargets.java"),
+            "LombokPoint (@Data) must be a lombok_to_record candidate: " + c);
+        // @Getter-only class is NOT a data carrier → must not appear.
+        assertTrue(c.stream().allMatch(x -> String.valueOf(x.get("snippet")).contains("@Data")
+            || String.valueOf(x.get("snippet")).contains("@Value")),
+            "only @Data/@Value classes qualify: " + c);
+    }
+
+    @Test
+    @DisplayName("delombok finds every Lombok-annotated class")
+    void delombok() {
+        List<Map<String, Object>> c = run("delombok");
+        assertTrue(hitsLombokTargets(c, "LombokTargets.java"),
+            "Lombok-annotated classes must be delombok candidates: " + c);
+        // Both @Data and @Getter classes are delombok candidates → at least 2.
+        long lombokHits = c.stream()
+            .filter(x -> String.valueOf(x.get("filePath")).endsWith("LombokTargets.java"))
+            .count();
+        assertTrue(lombokHits >= 2, "expected both LombokPoint and LombokBox: " + c);
+    }
+
     @Test
     @DisplayName("unknown kind is rejected")
     void unknownKind() {

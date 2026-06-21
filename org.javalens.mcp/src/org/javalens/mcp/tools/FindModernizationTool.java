@@ -17,6 +17,7 @@ import org.eclipse.jdt.core.dom.SwitchStatement;
 import org.eclipse.jdt.core.dom.Type;
 import org.eclipse.jdt.core.dom.TypeDeclaration;
 import org.javalens.core.IJdtService;
+import org.javalens.mcp.tools.lombok.LombokDetector;
 import org.javalens.mcp.models.ResponseMeta;
 import org.javalens.mcp.models.ToolResponse;
 import org.slf4j.Logger;
@@ -48,7 +49,8 @@ public class FindModernizationTool extends AbstractTool {
 
     static final Set<String> KINDS = Set.of(
         "anon_to_lambda", "switch_to_pattern", "loop_to_stream",   // batch 1 (B3)
-        "optional", "class_to_record", "sealed");                  // batch 2 (B4)
+        "optional", "class_to_record", "sealed",                   // batch 2 (B4)
+        "lombok_to_record", "delombok");                           // Lombok removal (B5b)
 
     public FindModernizationTool(Supplier<IJdtService> serviceSupplier) {
         super(serviceSupplier);
@@ -84,6 +86,10 @@ public class FindModernizationTool extends AbstractTool {
                                  boilerplate — prefer this over generating accessors.
             - sealed           — abstract base classes whose subclass set may be closed,
                                  candidates for a `sealed` + `permits` hierarchy (Java 17).
+            - lombok_to_record — classes annotated @Data/@Value that are data carriers,
+                                 candidates to drop Lombok for a native record (Java 16).
+            - delombok         — any class using Lombok annotations; candidate to remove
+                                 the Lombok dependency by materializing generated members.
 
             Optional: projectKey to scope to one loaded project; maxResults (default 200).
             Requires load_project first.
@@ -293,6 +299,38 @@ public class FindModernizationTool extends AbstractTool {
                     add(out, rel, ast.getLineNumber(node.getStartPosition()),
                         "abstract class " + node.getName().getIdentifier(),
                         "consider 'sealed' + 'permits' if the subclass set is closed (Java 17)");
+                    return true;
+                }
+            });
+            case "lombok_to_record" -> ast.accept(new ASTVisitor() {
+                @Override
+                public boolean visit(TypeDeclaration node) {
+                    if (out.size() >= max) {
+                        return false;
+                    }
+                    if (node.isInterface() || node.getSuperclassType() != null
+                            || !LombokDetector.isDataCarrier(node)) {
+                        return true; // records can't extend; need @Data/@Value
+                    }
+                    add(out, rel, ast.getLineNumber(node.getStartPosition()),
+                        "@Data/@Value class " + node.getName().getIdentifier(),
+                        "drop Lombok for a native record (accessors + equals/hashCode/toString for free)");
+                    return true;
+                }
+            });
+            case "delombok" -> ast.accept(new ASTVisitor() {
+                @Override
+                public boolean visit(TypeDeclaration node) {
+                    if (out.size() >= max) {
+                        return false;
+                    }
+                    List<String> anns = LombokDetector.lombokAnnotations(node);
+                    if (anns.isEmpty()) {
+                        return true;
+                    }
+                    add(out, rel, ast.getLineNumber(node.getStartPosition()),
+                        node.getName().getIdentifier() + " uses Lombok " + anns,
+                        "delombok: materialize generated members and remove the Lombok dependency");
                     return true;
                 }
             });
