@@ -132,6 +132,73 @@ class AnalyzeJavadocsToolTest {
         assertNotNull(f, "ingest still works after validate (no global option mutation)");
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> generate(String symbol) {
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("kind", "generate");
+        if (symbol != null) {
+            args.put("symbol", symbol);
+        }
+        ToolResponse r = tool.execute(args);
+        assertTrue(r.isSuccess(), () -> String.valueOf(r.getError()));
+        return (Map<String, Object>) r.getData();
+    }
+
+    @Test
+    @DisplayName("generate: doclint skeleton + evidence for a method, no model-written prose")
+    void generateMethodSkeleton() {
+        Map<String, Object> d = generate("com.example.JavadocTargets#discountedTotal");
+        assertEquals(Boolean.FALSE, d.get("skip"));
+        assertEquals("method", d.get("targetKind"));
+        String skeleton = (String) d.get("skeleton");
+        assertTrue(skeleton.contains("@param subtotal TODO"), skeleton);
+        assertTrue(skeleton.contains("@param rate TODO"), skeleton);
+        assertTrue(skeleton.contains("@return TODO"), skeleton);
+        assertTrue(skeleton.contains("@throws IllegalArgumentException TODO"), skeleton);
+        // model-free: every described slot is a TODO placeholder, never prose.
+        assertFalse(skeleton.toLowerCase().contains("discount rate"), "no fabricated prose: " + skeleton);
+
+        @SuppressWarnings("unchecked")
+        List<String> placeholders = (List<String>) d.get("prosePlaceholders");
+        assertTrue(placeholders.containsAll(List.of("summary", "@param subtotal", "@param rate",
+            "@return", "@throws IllegalArgumentException")), placeholders.toString());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> evidence = (Map<String, Object>) d.get("evidence");
+        assertEquals("public", evidence.get("visibility"));
+        assertEquals("double", evidence.get("returns"));
+        assertEquals(List.of("IllegalArgumentException"), evidence.get("throws"));
+    }
+
+    @Test
+    @DisplayName("generate: trivial getter → skip:true")
+    void generateSkipsTrivialAccessor() {
+        Map<String, Object> d = generate("com.example.JavadocTargets#getName");
+        assertEquals(Boolean.TRUE, d.get("skip"));
+        assertFalse(d.containsKey("skeleton"), "skipped target emits no skeleton");
+    }
+
+    @Test
+    @DisplayName("generate: type target → type skeleton")
+    void generateTypeSkeleton() {
+        Map<String, Object> d = generate("com.example.JavadocTargets");
+        assertEquals("type", d.get("targetKind"));
+        assertEquals(Boolean.FALSE, d.get("skip"));
+        assertTrue(((String) d.get("skeleton")).contains("TODO: summarize JavadocTargets"));
+    }
+
+    @Test
+    @DisplayName("generate: missing symbol rejected; unknown symbol not found")
+    void generateBadInputs() {
+        ToolResponse missing = tool.execute(objectMapper.createObjectNode().put("kind", "generate"));
+        assertFalse(missing.isSuccess());
+        assertEquals("INVALID_PARAMETER", missing.getError().getCode());
+
+        ToolResponse unknown = tool.execute(objectMapper.createObjectNode()
+            .put("kind", "generate").put("symbol", "com.example.NoSuchType#nope"));
+        assertFalse(unknown.isSuccess());
+    }
+
     @Test
     @DisplayName("unknown kind is rejected")
     void unknownKind() {

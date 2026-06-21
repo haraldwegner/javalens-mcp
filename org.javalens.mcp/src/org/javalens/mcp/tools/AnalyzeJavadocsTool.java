@@ -56,8 +56,7 @@ public class AnalyzeJavadocsTool extends AbstractTool {
 
     private static final Logger log = LoggerFactory.getLogger(AnalyzeJavadocsTool.class);
 
-    // Grows per stage: + generate (C3).
-    static final Set<String> KINDS = Set.of("ingest", "validate");
+    static final Set<String> KINDS = Set.of("ingest", "validate", "generate");
 
     /**
      * Doc-comment compiler options overlaid on the parser for {@code validate}
@@ -100,9 +99,14 @@ public class AnalyzeJavadocsTool extends AbstractTool {
             - validate — doclint-style validation (via the compiler): reports broken/invalid
                          Javadoc and missing tags on DOCUMENTED members. Does not flag
                          undocumented getters/setters (no missing-comment spam).
+            - generate — emit a doclint-correct Javadoc SKELETON + extracted evidence for a
+                         target symbol (FQN). MODEL-FREE: it returns @param/@return/@throws
+                         stubs + prosePlaceholders; the calling agent writes the prose (see
+                         sprint-future-agent-runner.md). Trivial getters/setters → skip:true.
+                         Requires `symbol` (e.g. "com.foo.Bar#method").
 
-            Optional: filePath to scope to one file; projectKey to scope to one loaded
-            project; maxResults (default 200). Requires load_project first.
+            Optional: filePath to scope ingest/validate to one file; symbol (FQN) for generate;
+            projectKey; maxResults (default 200). Requires load_project first.
             """;
     }
 
@@ -120,6 +124,10 @@ public class AnalyzeJavadocsTool extends AbstractTool {
         filePath.put("type", "string");
         filePath.put("description", "Optional. Restrict to one file; omit to scan the project.");
         properties.put("filePath", filePath);
+        Map<String, Object> symbol = new LinkedHashMap<>();
+        symbol.put("type", "string");
+        symbol.put("description", "For kind=generate: FQN target, e.g. \"com.foo.Bar\" or \"com.foo.Bar#method\".");
+        properties.put("symbol", symbol);
         Map<String, Object> maxResults = new LinkedHashMap<>();
         maxResults.put("type", "integer");
         maxResults.put("description", "Cap on facts returned (default 200).");
@@ -142,8 +150,174 @@ public class AnalyzeJavadocsTool extends AbstractTool {
         return switch (kind) {
             case "ingest" -> ingest(service, arguments);
             case "validate" -> validate(service, arguments);
+            case "generate" -> generate(service, arguments);
             default -> ToolResponse.invalidParameter("kind", "Unhandled kind '" + kind + "'");
         };
+    }
+
+    private ToolResponse generate(IJdtService service, JsonNode arguments) {
+        String symbol = getStringParam(arguments, "symbol");
+        if (symbol == null || symbol.isBlank()) {
+            return ToolResponse.invalidParameter("symbol",
+                "kind=generate requires a target FQN, e.g. \"com.foo.Bar#method\" or \"com.foo.Bar\".");
+        }
+        try {
+            java.util.Optional<org.eclipse.jdt.core.IJavaElement> resolved =
+                org.javalens.mcp.tools.fqn.FqnResolver.resolveWorkspace(symbol, service);
+            if (resolved.isEmpty()) {
+                return ToolResponse.symbolNotFound(
+                    symbol + " — expected a type/method/field FQN like \"com.foo.Bar#method\".");
+            }
+            org.eclipse.jdt.core.IJavaElement element = resolved.get();
+
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("operation", "analyze_javadocs");
+            data.put("kind", "generate");
+            data.put("symbol", symbol);
+
+            if (element instanceof org.eclipse.jdt.core.IMethod method) {
+                if (isTrivialAccessor(method)) {
+                    data.put("targetKind", "method");
+                    data.put("skip", true);
+                    data.put("reason", "trivial accessor — not worth documenting");
+                    return ToolResponse.success(data, ResponseMeta.builder().build());
+                }
+                fillMethodSkeleton(method, data);
+            } else if (element instanceof org.eclipse.jdt.core.IType type) {
+                fillTypeSkeleton(type, data);
+            } else if (element instanceof org.eclipse.jdt.core.IField field) {
+                fillFieldSkeleton(field, data);
+            } else {
+                return ToolResponse.invalidParameter("symbol",
+                    "Target must be a type, method, or field; got " + element.getElementName());
+            }
+
+            data.put("note", "MODEL-FREE: prose is the calling agent's job — fill the "
+                + "prosePlaceholders into the skeleton (see sprint-future-agent-runner.md).");
+            return ToolResponse.success(data, ResponseMeta.builder()
+                .suggestedNextTools(List.of(
+                    "the agent writes prose into the skeleton, then applies it"))
+                .build());
+        } catch (Exception e) {
+            log.error("analyze_javadocs(generate) failed: {}", e.getMessage(), e);
+            return ToolResponse.internalError(e);
+        }
+    }
+
+    private static boolean isTrivialAccessor(org.eclipse.jdt.core.IMethod m) throws Exception {
+        String n = m.getElementName();
+        int params = m.getNumberOfParameters();
+        boolean voidReturn = "V".equals(m.getReturnType());
+        boolean getter = (n.startsWith("get") || n.startsWith("is")) && params == 0 && !voidReturn;
+        boolean setter = n.startsWith("set") && params == 1 && voidReturn;
+        return (getter || setter) && !m.isConstructor();
+    }
+
+    private static void fillMethodSkeleton(org.eclipse.jdt.core.IMethod m, Map<String, Object> data)
+            throws Exception {
+        String[] paramNames = m.getParameterNames();
+        boolean ctor = m.isConstructor();
+        boolean voidReturn = "V".equals(m.getReturnType());
+        List<String> throwsSimple = new ArrayList<>();
+        for (String sig : m.getExceptionTypes()) {
+            throwsSimple.add(org.eclipse.jdt.core.Signature.getSignatureSimpleName(sig));
+        }
+
+        List<String> placeholders = new ArrayList<>();
+        placeholders.add("summary");
+        StringBuilder sk = new StringBuilder("/**\n * TODO: summarize ")
+            .append(m.getElementName()).append(".\n");
+        if (paramNames.length > 0 || (!voidReturn && !ctor) || !throwsSimple.isEmpty()) {
+            sk.append(" *\n");
+        }
+        for (String p : paramNames) {
+            sk.append(" * @param ").append(p).append(" TODO: describe\n");
+            placeholders.add("@param " + p);
+        }
+        if (!voidReturn && !ctor) {
+            sk.append(" * @return TODO: describe\n");
+            placeholders.add("@return");
+        }
+        for (String t : throwsSimple) {
+            sk.append(" * @throws ").append(t).append(" TODO: describe\n");
+            placeholders.add("@throws " + t);
+        }
+        sk.append(" */");
+
+        Map<String, Object> evidence = new LinkedHashMap<>();
+        evidence.put("visibility", visibility(m.getFlags()));
+        evidence.put("constructor", ctor);
+        if (!ctor) {
+            evidence.put("returns", org.eclipse.jdt.core.Signature
+                .getSignatureSimpleName(m.getReturnType()));
+        }
+        if (!throwsSimple.isEmpty()) {
+            evidence.put("throws", throwsSimple);
+        }
+        evidence.put("deprecated", org.eclipse.jdt.core.Flags.isDeprecated(m.getFlags()));
+
+        data.put("targetKind", "method");
+        data.put("skip", false);
+        data.put("skeleton", sk.toString());
+        data.put("evidence", evidence);
+        data.put("prosePlaceholders", placeholders);
+    }
+
+    private static void fillTypeSkeleton(org.eclipse.jdt.core.IType t, Map<String, Object> data)
+            throws Exception {
+        List<String> placeholders = new ArrayList<>();
+        placeholders.add("summary");
+        StringBuilder sk = new StringBuilder("/**\n * TODO: summarize ")
+            .append(t.getElementName()).append(".\n");
+        org.eclipse.jdt.core.ITypeParameter[] tps = t.getTypeParameters();
+        if (tps.length > 0) {
+            sk.append(" *\n");
+            for (org.eclipse.jdt.core.ITypeParameter tp : tps) {
+                sk.append(" * @param <").append(tp.getElementName()).append("> TODO: describe\n");
+                placeholders.add("@param <" + tp.getElementName() + ">");
+            }
+        }
+        sk.append(" */");
+
+        Map<String, Object> evidence = new LinkedHashMap<>();
+        evidence.put("visibility", visibility(t.getFlags()));
+        evidence.put("kind", t.isInterface() ? "interface" : t.isEnum() ? "enum"
+            : t.isAnnotation() ? "annotation" : "class");
+        evidence.put("deprecated", org.eclipse.jdt.core.Flags.isDeprecated(t.getFlags()));
+
+        data.put("targetKind", "type");
+        data.put("skip", false);
+        data.put("skeleton", sk.toString());
+        data.put("evidence", evidence);
+        data.put("prosePlaceholders", placeholders);
+    }
+
+    private static void fillFieldSkeleton(org.eclipse.jdt.core.IField f, Map<String, Object> data)
+            throws Exception {
+        String sk = "/**\n * TODO: describe " + f.getElementName() + ".\n */";
+        Map<String, Object> evidence = new LinkedHashMap<>();
+        evidence.put("visibility", visibility(f.getFlags()));
+        evidence.put("type", org.eclipse.jdt.core.Signature.getSignatureSimpleName(f.getTypeSignature()));
+        evidence.put("constant", org.eclipse.jdt.core.Flags.isStatic(f.getFlags())
+            && org.eclipse.jdt.core.Flags.isFinal(f.getFlags()));
+        data.put("targetKind", "field");
+        data.put("skip", false);
+        data.put("skeleton", sk);
+        data.put("evidence", evidence);
+        data.put("prosePlaceholders", List.of("summary"));
+    }
+
+    private static String visibility(int flags) {
+        if (org.eclipse.jdt.core.Flags.isPublic(flags)) {
+            return "public";
+        }
+        if (org.eclipse.jdt.core.Flags.isProtected(flags)) {
+            return "protected";
+        }
+        if (org.eclipse.jdt.core.Flags.isPrivate(flags)) {
+            return "private";
+        }
+        return "package-private";
     }
 
     private List<Path> resolveTargets(IJdtService service, JsonNode arguments) {

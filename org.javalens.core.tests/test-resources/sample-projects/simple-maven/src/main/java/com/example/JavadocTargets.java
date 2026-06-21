@@ -14,7 +14,7 @@ public class JavadocTargets {
      * @return the discounted total, never negative
      * @throws IllegalArgumentException if rate is outside [0,1]
      */
-    public double discountedTotal(double subtotal, double rate) {
+    public double discountedTotal(double subtotal, double rate) throws IllegalArgumentException {
         if (rate < 0 || rate > 1) {
             throw new IllegalArgumentException("rate out of range");
         }
