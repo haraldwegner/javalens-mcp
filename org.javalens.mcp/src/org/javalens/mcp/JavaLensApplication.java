@@ -54,6 +54,7 @@ import org.javalens.mcp.tools.EncapsulateFieldTool;
 import org.javalens.mcp.tools.CompileWorkspaceTool;
 import org.javalens.mcp.tools.RefreshWorkspaceTool;
 import org.javalens.mcp.tools.FindDuplicateCodeTool;
+import org.javalens.mcp.tools.AnalyzeJavadocsTool;
 import org.javalens.mcp.tools.ApplyCleanupTool;
 import org.javalens.mcp.tools.FindModernizationTool;
 import org.javalens.mcp.tools.RunTestsTool;
@@ -432,6 +433,9 @@ public class JavaLensApplication implements IApplication {
 
         // Sprint 15 (v1.10.0): parametric clean-up catalog (upstream v1.4.2 harvest).
         toolRegistry.register(new ApplyCleanupTool(() -> jdtService, refactoringChangeCache));
+
+        // Sprint 15a (v1.11.0): naming + Javadoc knowledge tools.
+        toolRegistry.register(new AnalyzeJavadocsTool(() -> jdtService));
 
         // Sprint 13 (v1.7.0): Ring 2 code generation tools.
         toolRegistry.register(new GenerateConstructorTool(() -> jdtService, refactoringChangeCache));
