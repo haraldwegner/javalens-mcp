@@ -1,5 +1,29 @@
 # Fork Sprint 15 — Modernisation sweeps
 
+> **✅ SHIPPED 2026-06-21 — javalens-mcp v1.10.0 (the FINAL javalens-branded release).**
+> Delivered, as committed/verified:
+> - **B0** bugs #14 (`health_check` real version) + #15 (`change_method_signature`
+>   constructor handling); fork issues #1/#3 close at this release.
+> - **B1/B2** Cursor-DX block: `FqnResolver` dot-form member fallback (fixes all 4
+>   `find_*`); `analyze_method` resolved-symbol echo + nearby-candidate graceful errors +
+>   example arg shapes. (DX#1/#2 were largely already shipped in v1.8.0.)
+> - **B3/B4** modernisation packaged as **ONE parametric `find_modernization(kind)`** —
+>   *not* 6 separate tools (Harald's call: keeps the count low under the Antigravity cap;
+>   matches `find_quality_issue`). 8 kinds: anon_to_lambda, switch_to_pattern,
+>   loop_to_stream, optional, class_to_record, sealed, + (B5b) lombok_to_record, delombok.
+> - **B5a** `apply_cleanup` parametric catalog (add_final, redundant_modifiers) — apply/undo,
+>   non-overlapping with existing tools.
+> - **B5b** Lombok **removal**: the two `find_modernization` Lombok kinds + a source-only
+>   `LombokDetector` (no agent).
+> - **B5c** Lombok **comprehension** agent (Option B): the product bundles a pinned
+>   `lombok.jar` (1.18.36, version-locked to JDT 3.39); the **manager** detects Lombok in a
+>   workspace and conditionally prepends `-javaagent:lombok.jar` to the resident JVM.
+>   **E2E-PROVEN**: with the agent, `get_type_members` on a `@Data` class surfaces the
+>   synthesized getters; without it (control), they're absent.
+> - Tool count **79 → 81**. Full reactor green; `lombok.jar` bundled in all 5 platform products.
+>
+> The original "+6 separate tools" scope below is superseded by the parametric design.
+>
 > **Status: re-sequenced 2026-06-07.** Originally drafted as Sprint 16 (SCAFFOLD). Pulled forward to **Sprint 15** when the fork roadmap reordered to ship Modernisation (Java language catch-up: lambdas, records, sealed, pattern-matching) before Fowler smell detection — modernisation tools are smaller scope (~6 tools) and ship as a tighter release.
 >
 > **Target version: javalens-mcp v1.10.0** (minor bump for the 6 new tools).

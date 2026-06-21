@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
 
-**79 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, auto-applying refactorings with one-call undo, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection + removal — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
+**81 MCP tools driving Eclipse JDT for compiler-accurate analysis, navigation, and refactoring on real-world Java workspaces.** Multi-project workspaces, auto-applying refactorings with one-call undo, code generation, dependency management (Maven + Gradle), workspace-wide verification, and duplicate-code detection + removal — the things a human gets in Eclipse or IntelliJ, packaged for AI coding agents over MCP.
 
 Battle-tested daily on multi-project codebases via the companion **[javalens-manager](https://github.com/haraldwegner/javalens-manager)** desktop control plane. Improvement loop is live: features, fixes, and ergonomics ship in response to refactoring sessions in production. See the [roadmap](docs/sprints/) for what's coming and the [release notes](docs/release-notes/) for what just shipped.
 
@@ -93,7 +93,7 @@ Two PDE bundles loaded into one workspace where bundle A's `Require-Bundle` list
 
 ### Tool-surface progression (v1.5.0 — v1.7.0)
 
-Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 75 in v1.8.0 → 79 in v1.9.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
+Per-workspace tool count: **66 → 55 in v1.5.0 → 60 in v1.5.1 → 62 in v1.6.0 → 73 in v1.7.0 → 75 in v1.8.0 → 79 in v1.9.0 → 81 in v1.10.0**. The v1.5.0 step replaced 13 narrow tools with two parametric ones:
 
 - **`find_pattern_usages(kind, query)`** — `kind ∈ { annotation, instantiation, type_argument, cast, instanceof }`.
 - **`find_quality_issue(kind, …)`** — `kind ∈ { naming, bugs, unused, large_classes, circular_deps, reflection, throws, catches }`.
@@ -216,7 +216,7 @@ Multi-client benefit: when 3 Claude windows + Cursor connect to the same URL, th
 }
 ```
 
-Both transports expose the same 79 tools through the same JSON-RPC handler — only the wire differs.
+Both transports expose the same 81 tools through the same JSON-RPC handler — only the wire differs.
 
 Drop a `workspace.json` into `/path/to/javalens-workspaces/` to load projects:
 
@@ -232,7 +232,7 @@ The watcher loads them on startup and reconciles edits live. For single-project 
 
 ---
 
-## Tools (79 in v1.9.0)
+## Tools (81 in v1.10.0)
 
 ### Workspace administration (5)
 
@@ -262,7 +262,7 @@ The watcher loads them on startup and reconciles edits live. For single-project 
 
 `get_diagnostics`, `validate_syntax`, `get_call_hierarchy_incoming`, `get_call_hierarchy_outgoing`, `get_hover_info`, `get_javadoc`, `get_signature_help`, `get_enclosing_element`, `analyze_change_impact`, `analyze_data_flow`, `analyze_control_flow`, `get_di_registrations`, `analyze_file`, `analyze_type`, `analyze_method`, `get_type_usage_summary`.
 
-### Refactoring (15 + 4 apply/undo primitives)
+### Refactoring (16 + 4 apply/undo primitives)
 
 **Since v1.9.0 every refactoring auto-applies** and returns
 `{ filesModified, diff, undoChangeId, summary }` — the agent's loop is
@@ -275,6 +275,14 @@ The contract is a durable PR gate: [`docs/refactoring-tool-contract.md`](docs/re
 **Structural (LTK-backed, v1.5.1):** `move_class`, `move_package`, `pull_up`, `push_down`, `encapsulate_field`.
 
 **Apply/undo primitives (v1.9.0):** `apply_refactoring`, `undo_refactoring`, `inspect_refactoring`, plus `replace_duplicates` — pass a stable `groupId` from `find_duplicate_code` and every same-type clone delegates to a canonical method, atomically with one undo handle.
+
+**Clean-up (v1.10.0):** `apply_cleanup(kind)` — parametric mechanical clean-ups (`add_final` with binding-checked reassignment detection, `redundant_modifiers` on interface members) via the same apply/undo contract; deliberately non-overlapping with `organize_imports` / `format` / `apply_quick_fix`. `filePath` scopes to one file; omit to sweep the whole project.
+
+### Modernisation (1 parametric, v1.10.0)
+
+| Tool | Description |
+|---|---|
+| **`find_modernization(kind)`** | Find-only: ranked candidates to adopt a newer Java idiom — `anon_to_lambda` / `switch_to_pattern` / `loop_to_stream` / `optional` / `class_to_record` / `sealed`, plus Lombok-removal `lombok_to_record` / `delombok`. Apply with the matching refactoring tool. |
 
 ### Verification (4)
 
