@@ -58,6 +58,7 @@ import org.javalens.mcp.tools.AnalyzeJavadocsTool;
 import org.javalens.mcp.tools.AnalyzeNamingTool;
 import org.javalens.mcp.tools.AnalyzeNullnessTool;
 import org.javalens.mcp.tools.ApplyCleanupTool;
+import org.javalens.mcp.tools.ApplyNullAnnotationsTool;
 import org.javalens.mcp.tools.FindModernizationTool;
 import org.javalens.mcp.tools.RunTestsTool;
 import org.javalens.mcp.tools.build.AddDependencyTool;
@@ -442,6 +443,7 @@ public class JavaLensApplication implements IApplication {
 
         // Sprint 15b (v1.12.0): Java null-safety tools.
         toolRegistry.register(new AnalyzeNullnessTool(() -> jdtService));
+        toolRegistry.register(new ApplyNullAnnotationsTool(() -> jdtService, refactoringChangeCache));
 
         // Sprint 13 (v1.7.0): Ring 2 code generation tools.
         toolRegistry.register(new GenerateConstructorTool(() -> jdtService, refactoringChangeCache));
